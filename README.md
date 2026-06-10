@@ -43,9 +43,11 @@ calls. It implements two decompression models side by side:
   2×10 / 2×11 / 2×12 / 2×15 / 2×18 L) and a start pressure, choose a reserve
   rule (rule of thirds, half + half, no reserve, or **min gas / rock bottom** —
   the gas two divers need to ascend from the deepest point to the first gas
-  switch, ×2), and the planner shows the pressure each cylinder needs, whether
-  you have enough under the reserve, the spare/shortfall in bar (or psi), and
-  the minimum fill to make the dive — raising an alert when any gas is short
+  switch, ×2), plus a configurable fixed **extra reserve** (default 40 bar)
+  added on top of every rule. The planner shows the pressure each cylinder
+  needs, whether you have enough under the reserve, the spare/shortfall in bar
+  (or psi), and the minimum fill to make the dive — raising an alert when any
+  gas is short
 - Metric / imperial display toggle (internal math is always metric)
 - Settings: descent/ascent rates, last stop 3 m or 6 m, salt/fresh water,
   surface pressure, deco ppO₂ limit, SAC rates, and whether stated segment

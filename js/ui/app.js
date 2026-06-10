@@ -93,6 +93,7 @@
       sacBottom: 20,
       sacDeco: 16,
       gasReserve: 'thirds',
+      extraReserveBar: 40,   // fixed reserve added on top of every rule (bar)
       customStops: null,     // verify mode: [{depth,time,gasId}] or null (computed)
       segments: [{ depth: 45, time: 25, gasId: 'tx2135' }],
       gases: [
@@ -231,7 +232,7 @@
       if (typeof s[k] === 'string') d[k] = s[k];
     });
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
-     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco']
+     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar']
       .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
     if (typeof s.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = s.segmentTimesIncludeTravel;
     if (Array.isArray(s.gases) && s.gases.length) {
@@ -518,6 +519,7 @@
     if (!(state.ppO2MaxDeco >= 0.4 && state.ppO2MaxDeco <= 2)) bad('ppO2MaxDeco', 'Deco ppO₂ limit must be 0.4–2.0 bar');
     if (!(state.sacBottom >= 1 && state.sacBottom <= 100)) bad('sacBottom', 'Bottom SAC out of range');
     if (!(state.sacDeco >= 1 && state.sacDeco <= 100)) bad('sacDeco', 'Deco SAC out of range');
+    if (!(state.extraReserveBar >= 0 && state.extraReserveBar <= 300)) bad('extraReserveBar', 'Extra reserve must be 0–300 bar');
 
     // Custom deco stops (verify mode). Off-grid and out-of-order depths are
     // accepted by the engine (verify-exact) — flag them inline as advisories
@@ -675,20 +677,24 @@
     var cyl = gasCylinder(g);
     var needBar = cyl.preset.liters > 0 ? litersUsed / cyl.preset.liters : Infinity;
 
-    var reserveBar, reserveLiters = null, isMinGas = false;
+    var ruleBar, reserveLiters = null, isMinGas = false;
     if (rule.kind === 'mingas' && ctx && ctx.minGas && ctx.bottomGasId === g.id) {
       // Fixed-volume reserve on the bottom gas: convert liters → bar of THIS tank.
       isMinGas = true;
       reserveLiters = ctx.minGas.liters;
-      reserveBar = cyl.preset.liters > 0 ? reserveLiters / cyl.preset.liters : Infinity;
+      ruleBar = cyl.preset.liters > 0 ? reserveLiters / cyl.preset.liters : Infinity;
     } else if (rule.kind === 'mingas') {
       // Deco gas (or no bottom-gas match): min-gas doesn't model donate-gas on a
       // stage; fall back to thirds so the card still gives sensible guidance.
-      reserveBar = cyl.startBar * (1 / 3);
+      ruleBar = cyl.startBar * (1 / 3);
     } else {
-      reserveBar = cyl.startBar * (1 - rule.usable);
+      ruleBar = cyl.startBar * (1 - rule.usable);
     }
-    var usableBar = cyl.startBar - reserveBar;
+    // A fixed extra reserve (default 40 bar) is added on top of EVERY rule,
+    // on every gas — a blunt safety floor the diver always keeps in the tank.
+    var extraBar = (isFinite(state.extraReserveBar) && state.extraReserveBar > 0) ? state.extraReserveBar : 0;
+    var reserveBar = ruleBar + extraBar;
+    var usableBar = Math.max(0, cyl.startBar - reserveBar);
     var usedFrac = cyl.startBar > 0 ? needBar / cyl.startBar : 1;   // of full tank
     var ok = needBar <= usableBar + 1e-6;
     var marginBar = usableBar - needBar;          // bar of usable gas left over
@@ -697,6 +703,7 @@
       litersUsed: litersUsed,
       capacityL: cyl.capacityL,
       needBar: needBar, usableBar: usableBar, reserveBar: reserveBar,
+      ruleBar: ruleBar, extraBar: extraBar,    // reserve breakdown for the card
       reserveLiters: reserveLiters, isMinGas: isMinGas,
       startBar: cyl.startBar, usedFrac: usedFrac, ok: ok, marginBar: marginBar,
       // smallest whole-bar fill that satisfies the reserve rule, for advice
@@ -823,6 +830,8 @@
     $('set-ppo2').value = state.ppO2MaxDeco;
     $('set-sac-bottom').value = sacOut(state.sacBottom);
     $('set-sac-deco').value = sacOut(state.sacDeco);
+    $('set-extra-reserve').value = pressOut(state.extraReserveBar);
+    $('set-extra-reserve').step = imperial() ? '50' : '5';
     $('set-incl-travel').checked = state.segmentTimesIncludeTravel;
     setSeg('laststop', state.lastStopDepth === 3 ? 'laststop-3' : 'laststop-6');
     setSeg('water', state.water === 'salt' ? 'water-salt' : 'water-fresh');
@@ -848,6 +857,8 @@
     ns = document.querySelectorAll('.u-depth-tile'); for (i = 0; i < ns.length; i++) ns[i].textContent = d;
     ns = document.querySelectorAll('.u-rate'); for (i = 0; i < ns.length; i++) ns[i].textContent = r;
     ns = document.querySelectorAll('.u-sac'); for (i = 0; i < ns.length; i++) ns[i].textContent = s;
+    var pu = pressUnit();
+    ns = document.querySelectorAll('.u-press'); for (i = 0; i < ns.length; i++) ns[i].textContent = pu;
     setSeg('units', imperial() ? 'units-imperial' : 'units-metric');
   }
 
@@ -1301,17 +1312,24 @@
       }
       card.appendChild(verdict);
 
-      // detail line: cylinder, start fill, reserve rule, surface volume
+      // detail line: cylinder, start fill, reserve rule (+ extra), surface volume
+      var ruleShort = sup.rule.short + (sup.extraBar > 0 ? ' +' + pressOut(sup.extraBar) + pressUnit() : '');
       var detail = sup.cyl.preset.label + ' @ ' + pressOut(startBar) + ' ' + pressUnit() +
-        ' · ' + sup.rule.short +
+        ' · ' + ruleShort +
         ' · ' + volOut(u.liters) + ' ' + volUnit() + ' used';
       card.appendChild(mk('div', 'gas-card-sub', detail));
-      // For the min-gas reserve, spell out the reserve volume + ascent it covers.
+      // Reserve breakdown line: total reserve, and for min-gas the ascent it covers.
+      var resLine = 'reserve ' + pressOut(sup.reserveBar) + ' ' + pressUnit();
       if (sup.isMinGas && ctx.minGas) {
-        card.appendChild(mk('div', 'gas-card-sub',
-          'reserve ' + pressOut(sup.reserveBar) + ' ' + pressUnit() + ' (' +
+        resLine += ' = ' + pressOut(sup.ruleBar) + ' min-gas (' +
           volOut(sup.reserveLiters) + ' ' + volUnit() + ', 2 divers ' +
-          depthOut(ctx.minGas.fromDepth) + '→' + depthOut(ctx.minGas.toDepth) + ' ' + depthUnit() + ')'));
+          depthOut(ctx.minGas.fromDepth) + '→' + depthOut(ctx.minGas.toDepth) + ' ' + depthUnit() + ')' +
+          (sup.extraBar > 0 ? ' + ' + pressOut(sup.extraBar) + ' extra' : '');
+        card.appendChild(mk('div', 'gas-card-sub', resLine));
+      } else if (sup.extraBar > 0) {
+        card.appendChild(mk('div', 'gas-card-sub',
+          resLine + ' = ' + pressOut(sup.ruleBar) + ' ' + sup.rule.short + ' + ' +
+          pressOut(sup.extraBar) + ' extra'));
       }
       host.appendChild(card);
     });
@@ -1465,7 +1483,8 @@
     var rule = RESERVE_RULES[state.gasReserve] || RESERVE_RULES.thirds;
     var supCtx = supplyContext(result);
     lines.push('');
-    lines.push('GAS SUPPLY  (' + rule.label + ')');
+    lines.push('GAS SUPPLY  (' + rule.label +
+      (state.extraReserveBar > 0 ? ' + ' + pressOut(state.extraReserveBar) + pu + ' extra' : '') + ')');
     (result.gasUsage || []).forEach(function (u) {
       var g = gasById(u.gasId);
       var sup = gasSupply(g || { type: 'bottom', cyl: 's80', startBar: 207 }, u.liters, supCtx);
@@ -1779,6 +1798,18 @@
     $('set-ppo2').addEventListener('input', function () { state.ppO2MaxDeco = num(this.value); onStateChanged({ refreshGas: true }); });
     $('set-sac-bottom').addEventListener('input', function () { state.sacBottom = sacIn(this.value); onStateChanged(); });
     $('set-sac-deco').addEventListener('input', function () { state.sacDeco = sacIn(this.value); onStateChanged(); });
+    // Extra reserve is presentation-only (doesn't change the deco plan): update
+    // state and re-render gas cards/warnings without a replan.
+    $('set-extra-reserve').addEventListener('input', function () {
+      var bar = imperial() ? num(this.value) / BAR2PSI : num(this.value);
+      state.extraReserveBar = isFinite(bar) && bar >= 0 ? bar : 0;
+      saveState();
+      applyValidation();
+      if (lastGoodResult) {
+        renderGasUsage(lastGoodResult);
+        renderWarnings(lastGoodResult, gasSupplyWarnings(lastGoodResult));
+      }
+    });
     $('set-incl-travel').addEventListener('change', function () { state.segmentTimesIncludeTravel = this.checked; onStateChanged(); });
     [['laststop-3', 3], ['laststop-6', 6]].forEach(function (pair) {
       $(pair[0]).addEventListener('click', function () {
