@@ -126,182 +126,6 @@
     return n;
   }
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
-
-  /* ----------------------------------------------------------
-     Custom listbox (themed replacement for native <select>).
-     The native open popup renders in OS chrome (white/blue) and
-     can't be styled; this builds a DOM listbox that matches the
-     console theme. One popup open at a time; full keyboard + ARIA.
-       makeListbox({ options:[{value,label,selected,disabled}],
-                     value, onChange, className, ariaLabel, vkey })
-       -> root element (contains the trigger button + lazy popup)
-  ---------------------------------------------------------- */
-  var openListbox = null;            // the currently-open instance, if any
-  var listboxGlobalsBound = false;
-
-  function closeOpenListbox(refocus) {
-    if (!openListbox) return;
-    var lb = openListbox;
-    openListbox = null;
-    lb.pop.hidden = true;
-    lb.trigger.setAttribute('aria-expanded', 'false');
-    lb.root.classList.remove('lb-open');
-    if (refocus && lb.trigger) lb.trigger.focus();
-  }
-
-  function bindListboxGlobals() {
-    if (listboxGlobalsBound) return;
-    listboxGlobalsBound = true;
-    document.addEventListener('mousedown', function (ev) {
-      if (openListbox && !openListbox.root.contains(ev.target)) closeOpenListbox(false);
-    });
-    // A scroll anywhere (other than inside the popup) or a resize closes it,
-    // rather than chasing the trigger with the fixed-position popup.
-    window.addEventListener('scroll', function (ev) {
-      if (openListbox && !(openListbox.pop && openListbox.pop.contains(ev.target))) {
-        closeOpenListbox(false);
-      }
-    }, true);
-    window.addEventListener('resize', function () { closeOpenListbox(false); });
-  }
-
-  function makeListbox(opts) {
-    bindListboxGlobals();
-    var options = opts.options || [];
-    var current = opts.value;
-    var onChange = opts.onChange || function () {};
-
-    var root = mk('div', 'lb' + (opts.className ? ' ' + opts.className : ''));
-    var trigger = mk('button', 'lb-trigger');
-    trigger.type = 'button';
-    trigger.setAttribute('aria-haspopup', 'listbox');
-    trigger.setAttribute('aria-expanded', 'false');
-    if (opts.ariaLabel) trigger.setAttribute('aria-label', opts.ariaLabel);
-    if (opts.vkey) trigger.setAttribute('data-vkey', opts.vkey);
-    var labelEl = mk('span', 'lb-label');
-    var chevron = mk('span', 'lb-chevron');
-    chevron.setAttribute('aria-hidden', 'true');
-    trigger.appendChild(labelEl);
-    trigger.appendChild(chevron);
-
-    var pop = mk('div', 'lb-pop');
-    pop.setAttribute('role', 'listbox');
-    pop.hidden = true;
-    if (opts.ariaLabel) pop.setAttribute('aria-label', opts.ariaLabel);
-
-    var optEls = [];
-    var activeIndex = -1;
-
-    function labelFor(val) {
-      for (var i = 0; i < options.length; i++) if (options[i].value === val) return options[i].label;
-      return '';
-    }
-    function syncTrigger() { labelEl.textContent = labelFor(current); }
-
-    function setActive(idx) {
-      if (idx < 0 || idx >= optEls.length) return;
-      if (activeIndex >= 0 && optEls[activeIndex]) optEls[activeIndex].classList.remove('active');
-      activeIndex = idx;
-      var el = optEls[activeIndex];
-      el.classList.add('active');
-      pop.setAttribute('aria-activedescendant', el.id);
-      if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
-    }
-    function nextEnabled(from, dir) {
-      var n = options.length, i = from;
-      for (var step = 0; step < n; step++) {
-        i = (i + dir + n) % n;
-        if (!options[i].disabled) return i;
-      }
-      return from;
-    }
-
-    function choose(val) {
-      var changed = val !== current;
-      current = val;
-      syncTrigger();
-      closeOpenListbox(true);
-      if (changed) onChange(val);
-    }
-
-    function buildPop() {
-      clear(pop);
-      optEls = [];
-      options.forEach(function (o, i) {
-        var el = mk('div', 'lb-opt' + (o.value === current ? ' sel' : '') + (o.disabled ? ' disabled' : ''));
-        el.id = 'lbopt-' + (++lbSeq);
-        el.setAttribute('role', 'option');
-        el.setAttribute('aria-selected', String(o.value === current));
-        var check = mk('span', 'lb-check'); check.textContent = '✓';
-        check.setAttribute('aria-hidden', 'true');
-        var txt = mk('span', 'lb-opt-label', o.label);
-        el.appendChild(check); el.appendChild(txt);
-        if (!o.disabled) {
-          el.addEventListener('mouseenter', function () { setActive(i); });
-          el.addEventListener('click', function () { choose(o.value); });
-        }
-        pop.appendChild(el);
-        optEls.push(el);
-      });
-    }
-
-    function position() {
-      var r = trigger.getBoundingClientRect();
-      pop.style.left = r.left + 'px';
-      pop.style.top = (r.bottom + 2) + 'px';
-      pop.style.minWidth = r.width + 'px';
-      // If it would overflow the bottom, flip above the trigger.
-      var ph = pop.offsetHeight;
-      if (r.bottom + 2 + ph > window.innerHeight && r.top - 2 - ph > 0) {
-        pop.style.top = (r.top - 2 - ph) + 'px';
-      }
-    }
-
-    function open() {
-      if (openListbox === inst) return;
-      closeOpenListbox(false);
-      buildPop();
-      pop.hidden = false;
-      root.classList.add('lb-open');
-      trigger.setAttribute('aria-expanded', 'true');
-      openListbox = inst;
-      position();
-      // start active on the selected option (or first enabled)
-      var sel = -1;
-      for (var i = 0; i < options.length; i++) if (options[i].value === current) { sel = i; break; }
-      setActive(sel >= 0 ? sel : nextEnabled(-1, 1));
-    }
-
-    trigger.addEventListener('click', function () {
-      if (openListbox === inst) closeOpenListbox(true); else open();
-    });
-    trigger.addEventListener('keydown', function (ev) {
-      var k = ev.key;
-      if (openListbox !== inst) {
-        if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'Enter' || k === ' ' || k === 'Spacebar') {
-          ev.preventDefault(); open();
-        }
-        return;
-      }
-      if (k === 'Escape') { ev.preventDefault(); closeOpenListbox(true); }
-      else if (k === 'ArrowDown') { ev.preventDefault(); setActive(nextEnabled(activeIndex, 1)); }
-      else if (k === 'ArrowUp') { ev.preventDefault(); setActive(nextEnabled(activeIndex, -1)); }
-      else if (k === 'Home') { ev.preventDefault(); setActive(nextEnabled(-1, 1)); }
-      else if (k === 'End') { ev.preventDefault(); setActive(nextEnabled(0, -1)); }
-      else if (k === 'Enter' || k === ' ' || k === 'Spacebar') {
-        ev.preventDefault();
-        if (activeIndex >= 0 && !options[activeIndex].disabled) choose(options[activeIndex].value);
-      }
-    });
-
-    root.appendChild(trigger);
-    root.appendChild(pop);
-    var inst = { root: root, trigger: trigger, pop: pop };
-    syncTrigger();
-    return root;
-  }
-  var lbSeq = 0;   // unique ids for option elements (aria-activedescendant)
-
   function fmt(x, d) {
     if (x === null || x === undefined || !isFinite(x)) return '—';
     return Number(x).toFixed(d === undefined ? 1 : d);
@@ -704,6 +528,13 @@
   /* ----------------------------------------------------------
      LEFT RAIL rendering
   ---------------------------------------------------------- */
+  function gasOption(g, selectedId) {
+    var o = mk('option', null, gasName(g) + (g.type === 'deco' ? ' · deco' : ''));
+    o.value = g.id;
+    if (g.id === selectedId) o.selected = true;
+    return o;
+  }
+
   function renderSegments() {
     var body = $('segments-body');
     clear(body);
@@ -729,22 +560,12 @@
       tdT.appendChild(inT);
 
       var tdG = mk('td');
-      tdG.appendChild(makeListbox({
-        options: state.gases.map(function (g) {
-          return {
-            value: g.id,
-            label: gasName(g) + (g.type === 'deco' ? ' · deco' : ''),
-            selected: g.id === s.gasId
-          };
-        }),
-        value: s.gasId,
-        className: 'lb-seg',
-        ariaLabel: 'Segment ' + (i + 1) + ' gas',
-        vkey: 'seg-' + i + '-gas',
-        onChange: (function (seg) {
-          return function (val) { seg.gasId = val; onStateChanged(); };
-        })(s)
-      }));
+      var sel = mk('select');
+      sel.setAttribute('data-seg', i); sel.setAttribute('data-field', 'gasId');
+      sel.setAttribute('data-vkey', 'seg-' + i + '-gas');
+      sel.setAttribute('aria-label', 'Segment ' + (i + 1) + ' gas');
+      state.gases.forEach(function (g) { sel.appendChild(gasOption(g, s.gasId)); });
+      tdG.appendChild(sel);
 
       var tdX = mk('td');
       var rm = mk('button', 'icon-btn', '✕');
@@ -836,22 +657,13 @@
       rm.title = 'Remove gas';
 
       var meta = mk('div', 'gas-meta');
-      var typeLb = makeListbox({
-        options: [
-          { value: 'bottom', label: 'BOTTOM', selected: g.type === 'bottom' },
-          { value: 'deco', label: 'DECO', selected: g.type === 'deco' }
-        ],
-        value: g.type,
-        className: 'lb-type',
-        ariaLabel: 'Gas ' + (i + 1) + ' role',
-        onChange: (function (gas) {
-          return function (val) {
-            gas.type = val;
-            renderGases(); renderSegments();
-            onStateChanged({ refreshGas: true });
-          };
-        })(g)
-      });
+      var sel = mk('select', 'gas-type');
+      sel.setAttribute('data-gas', i); sel.setAttribute('data-field', 'type');
+      sel.setAttribute('aria-label', 'Gas ' + (i + 1) + ' role');
+      var ob = mk('option', null, 'BOTTOM'); ob.value = 'bottom';
+      var od = mk('option', null, 'DECO'); od.value = 'deco';
+      if (g.type === 'bottom') ob.selected = true; else od.selected = true;
+      sel.appendChild(ob); sel.appendChild(od);
 
       var ro = gasReadoutText(g);
       var modSpan = mk('span', 'gas-readout');
@@ -861,25 +673,17 @@
       endSpan.setAttribute('data-gasend', i);
       endSpan.innerHTML = 'END <b>' + ro.end + '</b>';
 
-      meta.appendChild(typeLb); meta.appendChild(modSpan); meta.appendChild(endSpan);
+      meta.appendChild(sel); meta.appendChild(modSpan); meta.appendChild(endSpan);
 
       // --- cylinder row: tank preset + start pressure ---
       var tank = mk('div', 'gas-tank');
-      var cylLb = makeListbox({
-        options: CYL_PRESETS.map(function (c) {
-          return { value: c.key, label: c.label, selected: g.cyl === c.key };
-        }),
-        value: g.cyl,
-        className: 'lb-cyl',
-        ariaLabel: 'Gas ' + (i + 1) + ' cylinder',
-        onChange: (function (gas) {
-          return function (val) {
-            var c = cylPreset(val);
-            if (c) { gas.cyl = c.key; gas.startBar = c.ratedBar; }
-            renderGases(); renderSegments();
-            onStateChanged({ refreshGas: true });
-          };
-        })(g)
+      var cylSel = mk('select', 'gas-cyl');
+      cylSel.setAttribute('data-gas', i); cylSel.setAttribute('data-field', 'cyl');
+      cylSel.setAttribute('aria-label', 'Gas ' + (i + 1) + ' cylinder');
+      CYL_PRESETS.forEach(function (c) {
+        var o = mk('option', null, c.label); o.value = c.key;
+        if (g.cyl === c.key) o.selected = true;
+        cylSel.appendChild(o);
       });
 
       var pWrap = mk('div', 'gas-fill');
@@ -893,7 +697,7 @@
       pWrap.appendChild(inP);
       pWrap.appendChild(mk('span', 'frac-tag', pressUnit()));
 
-      tank.appendChild(cylLb); tank.appendChild(pWrap);
+      tank.appendChild(cylSel); tank.appendChild(pWrap);
 
       row.appendChild(fo); row.appendChild(fh); row.appendChild(name); row.appendChild(rm);
       row.appendChild(meta); row.appendChild(tank);
@@ -971,47 +775,14 @@
       : 'ZHL-16C · GF ' + Math.round(state.gfLow) + '/' + Math.round(state.gfHigh);
   }
 
-  var selectedPresetIdx = 0;   // current "+ ADD GAS" preset, read on click
-
   function renderPresets() {
-    var host = $('gas-preset-lb');
-    if (!host) return;
-    clear(host);
-    if (selectedPresetIdx < 0 || selectedPresetIdx >= PRESETS.length) selectedPresetIdx = 0;
-    host.appendChild(makeListbox({
-      options: PRESETS.map(function (p, i) {
-        return { value: String(i), label: p.label, selected: i === selectedPresetIdx };
-      }),
-      value: String(selectedPresetIdx),
-      className: 'lb-preset',
-      ariaLabel: 'Gas preset to add',
-      onChange: function (val) { selectedPresetIdx = parseInt(val, 10) || 0; }
-    }));
-  }
-
-  function renderReserve() {
-    var host = $('gas-reserve-lb');
-    if (!host) return;
-    clear(host);
-    host.appendChild(makeListbox({
-      options: [
-        { value: 'thirds', label: 'Rule of thirds', selected: state.gasReserve === 'thirds' },
-        { value: 'half', label: 'Half + half', selected: state.gasReserve === 'half' },
-        { value: 'none', label: 'No reserve', selected: state.gasReserve === 'none' }
-      ],
-      value: state.gasReserve,
-      className: 'lb-reserve',
-      ariaLabel: 'Gas reserve rule',
-      onChange: function (val) {
-        if (!RESERVE_RULES[val]) return;
-        state.gasReserve = val;
-        saveState();
-        if (lastGoodResult) {
-          renderGasUsage(lastGoodResult);
-          renderWarnings(lastGoodResult, gasSupplyWarnings(lastGoodResult));
-        }
-      }
-    }));
+    var sel = $('gas-preset');
+    clear(sel);
+    PRESETS.forEach(function (p, i) {
+      var o = mk('option', null, p.label);
+      o.value = String(i);
+      sel.appendChild(o);
+    });
   }
 
   function renderRail() {
@@ -1021,7 +792,8 @@
     renderSettings();
     renderUnitLabels();
     renderBadge();
-    renderReserve();
+    var rsv = $('gas-reserve');
+    if (rsv) rsv.value = state.gasReserve;
   }
 
   /* ----------------------------------------------------------
@@ -1515,8 +1287,6 @@
 
   function bindEvents() {
     // --- segments (delegated)
-    // depth/time number inputs (the gas picker is a custom listbox handled
-    // via its own onChange).
     $('segments-body').addEventListener('input', function (ev) {
       var t = ev.target;
       if (t.getAttribute('data-seg') === null) return;
@@ -1526,7 +1296,15 @@
       if (!s) return;
       if (f === 'depth') s.depth = depthIn(t.value);
       else if (f === 'time') s.time = num(t.value);
+      else if (f === 'gasId') s.gasId = t.value;
       onStateChanged();
+    });
+    $('segments-body').addEventListener('change', function (ev) {
+      var t = ev.target;
+      if (t.tagName === 'SELECT' && t.getAttribute('data-seg') !== null) {
+        var i = parseInt(t.getAttribute('data-seg'), 10);
+        if (state.segments[i]) { state.segments[i].gasId = t.value; onStateChanged(); }
+      }
     });
     $('segments-body').addEventListener('click', function (ev) {
       var btn = ev.target.closest ? ev.target.closest('[data-remove-seg]') : null;
@@ -1547,8 +1325,7 @@
       onStateChanged();
     });
 
-    // --- gases (delegated): O2/He/start-pressure number inputs. The gas-type
-    // and cylinder pickers are custom listboxes handled via their onChange.
+    // --- gases (delegated)
     $('gases-list').addEventListener('input', function (ev) {
       var t = ev.target;
       if (t.getAttribute('data-gas') === null) return;
@@ -1570,7 +1347,26 @@
       }
       if (f === 'fO2') g.fO2 = num(t.value) / 100;
       else if (f === 'fHe') g.fHe = num(t.value) / 100;
-      renderSegments(); // gas labels inside segment pickers may change
+      else if (f === 'type') g.type = t.value;
+      renderSegments(); // gas labels inside segment selects may change
+      onStateChanged({ refreshGas: true });
+    });
+    $('gases-list').addEventListener('change', function (ev) {
+      var t = ev.target;
+      if (t.tagName !== 'SELECT' || t.getAttribute('data-gas') === null) return;
+      var i = parseInt(t.getAttribute('data-gas'), 10);
+      var g = state.gases[i];
+      if (!g) return;
+      var f = t.getAttribute('data-field');
+      if (f === 'cyl') {
+        // Adopt the new tank's rated fill when switching cylinder type.
+        var c = cylPreset(t.value);
+        if (c) { g.cyl = c.key; g.startBar = c.ratedBar; }
+        renderGases();          // refresh the start-pressure field
+      } else if (f === 'type') {
+        g.type = t.value;
+      }
+      renderSegments();
       onStateChanged({ refreshGas: true });
     });
     $('gases-list').addEventListener('click', function (ev) {
@@ -1583,7 +1379,7 @@
       onStateChanged();
     });
     $('add-gas-btn').addEventListener('click', function () {
-      var p = PRESETS[selectedPresetIdx] || PRESETS[0];
+      var p = PRESETS[parseInt($('gas-preset').value, 10)] || PRESETS[0];
       var defCyl = (p.type === 'deco') ? 's80' : 'd2x12';
       state.gases.push({
         id: uniqueGasId(p.key),
@@ -1651,8 +1447,16 @@
       });
     });
 
-    // (Gas reserve rule is a custom listbox built in renderReserve(), with its
-    // own presentation-only onChange.)
+    // --- gas reserve rule (presentation-only: re-render cards from last plan)
+    $('gas-reserve').addEventListener('change', function () {
+      if (!RESERVE_RULES[this.value]) return;
+      state.gasReserve = this.value;
+      saveState();
+      if (lastGoodResult) {
+        renderGasUsage(lastGoodResult);
+        renderWarnings(lastGoodResult, gasSupplyWarnings(lastGoodResult));
+      }
+    });
 
     // --- units toggle
     [['units-metric', 'metric'], ['units-imperial', 'imperial']].forEach(function (pair) {

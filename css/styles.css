@@ -351,7 +351,7 @@ input[type="number"]:focus, select:focus {
   border-color: var(--phosphor);
   box-shadow: 0 0 0 1px rgba(53, 224, 194, .35), var(--glow);
 }
-input.invalid, select.invalid, .lb-trigger.invalid {
+input.invalid, select.invalid {
   border-color: var(--alert) !important;
   box-shadow: 0 0 0 1px rgba(255, 93, 108, .4);
   color: var(--alert);
@@ -366,96 +366,6 @@ select {
   cursor: pointer;
 }
 select option { background: var(--panel-solid); color: var(--ink); }
-
-/* =============================================================
-   CUSTOM LISTBOX (themed <select> replacement)
-   ============================================================= */
-.lb { position: relative; display: inline-block; width: 100%; }
-.lb-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  text-align: left;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--ink);
-  background: var(--input-bg);
-  border: 1px solid var(--hairline);
-  border-radius: 4px;
-  padding: 6px 8px;
-  cursor: pointer;
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.lb-trigger:hover { border-color: rgba(120, 180, 200, .34); }
-.lb-trigger:focus { outline: none; }
-.lb-trigger:focus-visible {
-  outline: none;
-  border-color: var(--phosphor);
-  box-shadow: 0 0 0 1px rgba(53, 224, 194, .35), var(--glow);
-}
-.lb-open .lb-trigger {
-  border-color: var(--phosphor);
-  box-shadow: 0 0 0 1px rgba(53, 224, 194, .35), var(--glow);
-}
-.lb-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lb-chevron {
-  flex: none;
-  width: 8px; height: 5px;
-  background: var(--dim);
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-  transition: transform .18s ease, background .15s ease;
-}
-.lb-trigger:hover .lb-chevron,
-.lb-open .lb-chevron { background: var(--phosphor); }
-.lb-open .lb-chevron { transform: rotate(180deg); }
-
-.lb-pop {
-  position: fixed;
-  z-index: 60;
-  margin: 0;
-  max-height: 248px;
-  overflow-y: auto;
-  background: var(--panel-solid);
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  padding: 4px;
-  box-shadow: 0 10px 28px rgba(2, 6, 12, .6), 0 0 0 1px rgba(53, 224, 194, .10);
-  animation: lb-in .12s ease;
-}
-@keyframes lb-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-.lb-opt {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  box-sizing: border-box;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--dim);
-  padding: 7px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.lb-opt:hover, .lb-opt.active {
-  background: rgba(53, 224, 194, .12);
-  color: var(--ink);
-}
-.lb-opt.sel { color: var(--phosphor); }
-.lb-opt.sel.active, .lb-opt.sel:hover { color: var(--phosphor); }
-.lb-opt.disabled { opacity: .4; cursor: not-allowed; }
-.lb-check {
-  flex: none;
-  width: 12px;
-  text-align: center;
-  color: var(--phosphor);
-  text-shadow: var(--glow);
-  visibility: hidden;
-}
-.lb-opt.sel .lb-check { visibility: visible; }
-.lb-opt-label { overflow: hidden; text-overflow: ellipsis; }
 
 input[type="checkbox"] {
   appearance: none;
@@ -623,7 +533,7 @@ input[type="checkbox"]:checked::after {
   gap: 14px;
   flex-wrap: wrap;
 }
-.gas-meta .lb-type { width: 92px; flex: none; }
+.gas-meta .gas-type { width: 92px; flex: none; }
 .gas-readout {
   font-size: 11px;
   color: var(--dim);
@@ -636,7 +546,7 @@ input[type="checkbox"]:checked::after {
 }
 
 .add-gas-row { display: flex; gap: 8px; align-items: stretch; }
-.add-gas-row .lb-mount { flex: 1; min-width: 0; }
+.add-gas-row select { flex: 1; }
 .add-gas-row .ghost-btn { flex: none; }
 
 /* cylinder picker row inside each gas */
@@ -649,7 +559,7 @@ input[type="checkbox"]:checked::after {
   margin-top: 1px;
   border-top: 1px dashed var(--hairline-soft);
 }
-.gas-tank .lb-cyl { flex: 1 1 auto; min-width: 0; }
+.gas-tank .gas-cyl { flex: 1 1 auto; min-width: 0; }
 .gas-fill {
   position: relative;
   flex: 0 0 96px;
@@ -973,14 +883,13 @@ input[type="range"]::-moz-range-thumb {
 
 /* reserve-rule picker in the panel header */
 .reserve-pick { display: flex; align-items: center; gap: 8px; }
-.reserve-pick .reserve-label {
+.reserve-pick label {
   font-family: var(--font-display);
   font-size: 10px;
   letter-spacing: .12em;
   color: var(--dim);
 }
-.reserve-pick .lb-reserve { min-width: 132px; }
-.reserve-pick .lb-reserve .lb-trigger { font-size: 11px; }
+.reserve-pick select { width: auto; min-width: 130px; padding: 6px 26px 6px 9px; font-size: 11px; }
 
 .gas-usage {
   display: grid;
