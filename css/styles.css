@@ -549,6 +549,31 @@ input[type="checkbox"]:checked::after {
 .add-gas-row select { flex: 1; }
 .add-gas-row .ghost-btn { flex: none; }
 
+/* cylinder picker row inside each gas */
+.gas-tank {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  padding-top: 9px;
+  margin-top: 1px;
+  border-top: 1px dashed var(--hairline-soft);
+}
+.gas-tank .gas-cyl { flex: 1 1 auto; min-width: 0; }
+.gas-fill {
+  position: relative;
+  flex: 0 0 96px;
+}
+.gas-fill input { padding-right: 30px; width: 100%; }
+.gas-fill .frac-tag {
+  position: absolute;
+  right: 8px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px;
+  color: var(--dim);
+  pointer-events: none;
+}
+
 /* =============================================================
    ALGORITHM PANEL
    ============================================================= */
@@ -856,9 +881,19 @@ input[type="range"]::-moz-range-thumb {
    GAS USAGE CARDS
    ============================================================= */
 
+/* reserve-rule picker in the panel header */
+.reserve-pick { display: flex; align-items: center; gap: 8px; }
+.reserve-pick label {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: .12em;
+  color: var(--dim);
+}
+.reserve-pick select { width: auto; min-width: 130px; padding: 6px 26px 6px 9px; font-size: 11px; }
+
 .gas-usage {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
 }
 .gas-card {
@@ -866,13 +901,18 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 5px;
   padding: 11px 12px;
   background: rgba(4, 10, 16, .30);
+  transition: border-color .25s ease, background .25s ease;
+}
+.gas-card.gas-short {
+  border-color: rgba(255, 93, 108, .55);
+  background: rgba(255, 93, 108, .055);
 }
 .gas-card-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 9px;
 }
 .gas-card-name {
   font-family: var(--font-mono);
@@ -881,27 +921,56 @@ input[type="range"]::-moz-range-thumb {
   letter-spacing: .04em;
 }
 .gas-card-amt {
-  font-size: 15px;
+  font-size: 16px;
   color: var(--phosphor);
   text-shadow: var(--glow);
   white-space: nowrap;
 }
-.gas-bar {
-  height: 5px;
-  border-radius: 3px;
+
+/* tank gauge: dim reserve base, bright usable fill, boundary tick */
+.tank-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
   background: rgba(120, 180, 200, .10);
   overflow: hidden;
-  margin-bottom: 7px;
+  margin-bottom: 8px;
 }
-.gas-bar span {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: linear-gradient(90deg, rgba(53, 224, 194, .45), var(--phosphor));
+.tank-reserve {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    -45deg, rgba(120, 180, 200, .05) 0 4px, rgba(120, 180, 200, .12) 4px 8px);
+}
+.tank-fill {
+  position: absolute; top: 0; left: 0; bottom: 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--phosphor-dim), var(--phosphor));
   box-shadow: var(--glow);
   transition: width .6s cubic-bezier(.2, .7, .3, 1);
 }
-.gas-card-sub { font-size: 10px; color: var(--dim); letter-spacing: .05em; }
+.tank-fill.over {
+  background: linear-gradient(90deg, rgba(255, 93, 108, .5), var(--alert));
+  box-shadow: 0 0 8px rgba(255, 93, 108, .4);
+}
+.tank-limit {
+  position: absolute; top: -2px; bottom: -2px;
+  width: 2px;
+  background: var(--ink);
+  opacity: .7;
+  transform: translateX(-1px);
+}
+.tank-verdict {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .03em;
+  margin-bottom: 6px;
+}
+.tank-verdict.ok { color: var(--phosphor); }
+.tank-verdict.bad { color: var(--alert); }
+.tank-glyph { font-weight: 700; }
+.gas-card-sub { font-size: 10px; color: var(--dim); letter-spacing: .04em; line-height: 1.5; }
+.gas-empty { color: var(--dim); font-size: 12px; }
 
 /* =============================================================
    WARNINGS / ERRORS

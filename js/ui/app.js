@@ -34,6 +34,44 @@
     { key: 'tx1070', label: '10/70',  fO2: 0.10, fHe: 0.70, type: 'bottom' }
   ];
 
+  /* Cylinder presets. `liters` = total internal water volume in L (twinsets
+     are summed). `ratedBar` is the nominal working pressure, used only as the
+     default fill when a cylinder is first chosen. Surface-equivalent gas
+     volume held = liters × pressure(bar) (ideal-gas; deep deco reserves are
+     comfortably covered by the rule-of-thirds margin). */
+  var CYL_PRESETS = [
+    { key: 's80',     label: 'AL80 / S80',   liters: 11.1, ratedBar: 207, twin: false },
+    { key: 'al40',    label: 'AL40 (deco)',  liters: 5.7,  ratedBar: 207, twin: false },
+    { key: 'al30',    label: 'AL30 (deco)',  liters: 4.3,  ratedBar: 207, twin: false },
+    { key: 'al13',    label: 'AL13 (pony)',  liters: 1.9,  ratedBar: 207, twin: false },
+    { key: 's10',     label: '10 L',         liters: 10,   ratedBar: 232, twin: false },
+    { key: 's12',     label: '12 L',         liters: 12,   ratedBar: 232, twin: false },
+    { key: 's15',     label: '15 L',         liters: 15,   ratedBar: 232, twin: false },
+    { key: 's18',     label: '18 L',         liters: 18,   ratedBar: 232, twin: false },
+    { key: 'd2x10',   label: 'Twins 2×10 L', liters: 20,   ratedBar: 232, twin: true  },
+    { key: 'd2x11',   label: 'Twins 2×11 L', liters: 22,   ratedBar: 232, twin: true  },
+    { key: 'd2x12',   label: 'Twins 2×12 L', liters: 24,   ratedBar: 232, twin: true  },
+    { key: 'd2x15',   label: 'Twins 2×15 L', liters: 30,   ratedBar: 232, twin: true  },
+    { key: 'd2x18',   label: 'Twins 2×18 L', liters: 36,   ratedBar: 232, twin: true  }
+  ];
+  function cylPreset(key) {
+    for (var i = 0; i < CYL_PRESETS.length; i++) if (CYL_PRESETS[i].key === key) return CYL_PRESETS[i];
+    return null;
+  }
+
+  /* Reserve rules. usable = the fraction of the START gas you may consume;
+     need ≤ start × usable must hold. Rule of thirds keeps 1/3 in reserve
+     (consume 2/3); "× 1.5" sizes the fill at 1.5× the need (consume 2/3 of
+     start, equivalent to thirds but framed as a fill target); half keeps 50%. */
+  var RESERVE_RULES = {
+    none:   { usable: 1.00, label: 'No reserve',     short: 'all usable' },
+    thirds: { usable: 2 / 3, label: 'Rule of thirds', short: '⅓ reserve' },
+    half:   { usable: 0.50, label: 'Half + half',    short: '½ reserve' }
+  };
+  var BAR2PSI = 14.5037744;
+  function pressOut(bar) { return imperial() ? Math.round(bar * BAR2PSI) : Math.round(bar); }
+  function pressUnit() { return imperial() ? 'psi' : 'bar'; }
+
   function defaults() {
     return {
       units: 'metric',
@@ -49,11 +87,12 @@
       segmentTimesIncludeTravel: true,
       sacBottom: 20,
       sacDeco: 16,
+      gasReserve: 'thirds',
       segments: [{ depth: 45, time: 25, gasId: 'tx2135' }],
       gases: [
-        { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom' },
-        { id: 'ean50',  fO2: 0.50, fHe: 0.00, type: 'deco' },
-        { id: 'o2',     fO2: 1.00, fHe: 0.00, type: 'deco' }
+        { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom', cyl: 'd2x12', startBar: 232 },
+        { id: 'ean50',  fO2: 0.50, fHe: 0.00, type: 'deco',   cyl: 's80',  startBar: 207 },
+        { id: 'o2',     fO2: 1.00, fHe: 0.00, type: 'deco',   cyl: 'al40', startBar: 207 }
       ]
     };
   }
@@ -182,7 +221,7 @@
     try { s = JSON.parse(raw); } catch (e) { return; }
     if (!s || typeof s !== 'object') return;
     var d = defaults();
-    ['units', 'algorithm', 'water'].forEach(function (k) {
+    ['units', 'algorithm', 'water', 'gasReserve'].forEach(function (k) {
       if (typeof s[k] === 'string') d[k] = s[k];
     });
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
@@ -194,9 +233,19 @@
         return g && typeof g.id === 'string' &&
                typeof g.fO2 === 'number' && typeof g.fHe === 'number' &&
                (g.type === 'bottom' || g.type === 'deco');
+      }).map(function (g) {
+        // Migrate gases stored before cylinder planning existed.
+        if (typeof g.cyl !== 'string' || !cylPreset(g.cyl)) {
+          g.cyl = (g.type === 'deco') ? 's80' : 'd2x12';
+        }
+        if (typeof g.startBar !== 'number' || !isFinite(g.startBar) || g.startBar <= 0) {
+          g.startBar = cylPreset(g.cyl).ratedBar;
+        }
+        return g;
       });
       if (gs.length) d.gases = gs;
     }
+    if (!RESERVE_RULES[d.gasReserve]) d.gasReserve = 'thirds';
     if (Array.isArray(s.segments) && s.segments.length) {
       var segs = s.segments.filter(function (sg) {
         return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
@@ -540,6 +589,38 @@
     return { mod: modTxt, end: endTxt, pp: pp };
   }
 
+  /* ----------------------------------------------------------
+     Cylinder gas-supply math (pure presentation: the engine
+     already gives surface-equivalent liters consumed per gas).
+     A cylinder of V liters at P bar holds ~V·P surface liters.
+  ---------------------------------------------------------- */
+  function gasCylinder(g) {
+    var c = cylPreset(g && g.cyl) || cylPreset('s80');
+    var startBar = (g && isFinite(g.startBar) && g.startBar > 0) ? g.startBar : c.ratedBar;
+    return { preset: c, startBar: startBar, capacityL: c.liters * startBar };
+  }
+  /* Returns null if the gas was never breathed, else a full supply report. */
+  function gasSupply(g, litersUsed) {
+    if (!g) return null;
+    var rule = RESERVE_RULES[state.gasReserve] || RESERVE_RULES.thirds;
+    var cyl = gasCylinder(g);
+    var needBar = cyl.preset.liters > 0 ? litersUsed / cyl.preset.liters : Infinity;
+    var usableBar = cyl.startBar * rule.usable;
+    var reserveBar = cyl.startBar - usableBar;
+    var usedFrac = cyl.startBar > 0 ? needBar / cyl.startBar : 1;   // of full tank
+    var ok = needBar <= usableBar + 1e-6;
+    var marginBar = usableBar - needBar;          // bar of usable gas left over
+    return {
+      cyl: cyl, rule: rule,
+      litersUsed: litersUsed,
+      capacityL: cyl.capacityL,
+      needBar: needBar, usableBar: usableBar, reserveBar: reserveBar,
+      startBar: cyl.startBar, usedFrac: usedFrac, ok: ok, marginBar: marginBar,
+      // smallest whole-bar fill that satisfies the reserve rule, for advice
+      minStartBar: rule.usable > 0 ? Math.ceil(needBar / rule.usable) : Infinity
+    };
+  }
+
   function renderGases() {
     var list = $('gases-list');
     clear(list);
@@ -594,8 +675,32 @@
 
       meta.appendChild(sel); meta.appendChild(modSpan); meta.appendChild(endSpan);
 
+      // --- cylinder row: tank preset + start pressure ---
+      var tank = mk('div', 'gas-tank');
+      var cylSel = mk('select', 'gas-cyl');
+      cylSel.setAttribute('data-gas', i); cylSel.setAttribute('data-field', 'cyl');
+      cylSel.setAttribute('aria-label', 'Gas ' + (i + 1) + ' cylinder');
+      CYL_PRESETS.forEach(function (c) {
+        var o = mk('option', null, c.label); o.value = c.key;
+        if (g.cyl === c.key) o.selected = true;
+        cylSel.appendChild(o);
+      });
+
+      var pWrap = mk('div', 'gas-fill');
+      var inP = mk('input');
+      inP.type = 'number'; inP.step = imperial() ? '50' : '5';
+      inP.min = imperial() ? '300' : '20'; inP.max = imperial() ? '4500' : '300';
+      inP.inputMode = 'numeric';
+      inP.value = pressOut(gasCylinder(g).startBar);
+      inP.setAttribute('data-gas', i); inP.setAttribute('data-field', 'startBar');
+      inP.setAttribute('aria-label', 'Gas ' + (i + 1) + ' start pressure');
+      pWrap.appendChild(inP);
+      pWrap.appendChild(mk('span', 'frac-tag', pressUnit()));
+
+      tank.appendChild(cylSel); tank.appendChild(pWrap);
+
       row.appendChild(fo); row.appendChild(fh); row.appendChild(name); row.appendChild(rm);
-      row.appendChild(meta);
+      row.appendChild(meta); row.appendChild(tank);
       list.appendChild(row);
     });
   }
@@ -687,6 +792,8 @@
     renderSettings();
     renderUnitLabels();
     renderBadge();
+    var rsv = $('gas-reserve');
+    if (rsv) rsv.value = state.gasReserve;
   }
 
   /* ----------------------------------------------------------
@@ -781,7 +888,7 @@
     renderTiles(result, animate);
     renderTable(result, animate);
     renderGasUsage(result);
-    renderWarnings(result);
+    renderWarnings(result, gasSupplyWarnings(result));
     renderCharts(result);
     if (animate) revealPanels();
   }
@@ -872,32 +979,89 @@
     var host = $('gas-usage');
     clear(host);
     var usage = result.gasUsage || [];
-    var max = 0;
-    usage.forEach(function (u) { max = Math.max(max, u.liters); });
+
     usage.forEach(function (u) {
-      var card = mk('div', 'gas-card');
+      var g = gasById(u.gasId) || { type: 'bottom', cyl: 's80', startBar: 207, fO2: u.fO2, fHe: u.fHe };
+      var sup = gasSupply(g, u.liters);
+      var card = mk('div', 'gas-card' + (sup && !sup.ok ? ' gas-short' : ''));
+
+      // header: gas name + cylinder label, and the required pressure (the
+      // number a diver actually reads off a gauge).
       var head = mk('div', 'gas-card-head');
-      head.appendChild(mk('span', 'gas-card-name', gasName(u)));
-      head.appendChild(mk('span', 'gas-card-amt num', volOut(u.liters) + ' ' + volUnit()));
-      var bar = mk('div', 'gas-bar');
-      var fill = mk('span');
-      fill.style.width = (max > 0 ? Math.max(2, u.liters / max * 100) : 0) + '%';
-      bar.appendChild(fill);
+      var nm = mk('span', 'gas-card-name', gasName(u));
+      head.appendChild(nm);
+      head.appendChild(mk('span', 'gas-card-amt num',
+        pressOut(sup.needBar) + ' ' + pressUnit()));
       card.appendChild(head);
+
+      // tank-fill bar: usable zone (phosphor/amber/alert) over the reserve
+      // zone (dim), with a tick at the consumed level.
+      var startBar = sup.startBar;
+      var usedPct = startBar > 0 ? Math.min(100, sup.needBar / startBar * 100) : 100;
+      var usablePct = startBar > 0 ? sup.usableBar / startBar * 100 : 100;
+      var bar = mk('div', 'tank-bar');
+      var reserve = mk('span', 'tank-reserve');     // full-width dim base
+      var fill = mk('span', 'tank-fill' + (sup.ok ? '' : ' over'));
+      fill.style.width = usedPct + '%';
+      var limit = mk('span', 'tank-limit');         // usable/reserve boundary
+      limit.style.left = usablePct + '%';
+      bar.appendChild(reserve); bar.appendChild(fill); bar.appendChild(limit);
       card.appendChild(bar);
+
+      // verdict line
+      var verdict = mk('div', 'tank-verdict' + (sup.ok ? ' ok' : ' bad'));
+      verdict.appendChild(mk('span', 'tank-glyph', sup.ok ? '✓' : '✕'));
+      if (sup.ok) {
+        verdict.appendChild(mk('span', null,
+          'OK · ' + pressOut(sup.marginBar) + ' ' + pressUnit() + ' spare'));
+      } else {
+        var shortBar = sup.needBar - sup.usableBar;
+        verdict.appendChild(mk('span', null,
+          'SHORT by ' + pressOut(shortBar) + ' ' + pressUnit() +
+          ' · need ≥ ' + pressOut(sup.minStartBar) + ' ' + pressUnit() + ' fill'));
+      }
+      card.appendChild(verdict);
+
+      // detail line: cylinder, start fill, reserve rule, surface volume
       card.appendChild(mk('div', 'gas-card-sub',
-        'fO₂ ' + fmt(u.fO2, 2) + ' · fHe ' + fmt(u.fHe, 2)));
+        sup.cyl.preset.label + ' @ ' + pressOut(startBar) + ' ' + pressUnit() +
+        ' · ' + sup.rule.short +
+        ' · ' + volOut(u.liters) + ' ' + volUnit() + ' used'));
       host.appendChild(card);
     });
+
+    if (!usage.length) {
+      host.appendChild(mk('p', 'gas-empty', 'No gas consumed.'));
+    }
   }
 
-  var SEVERE_RX = /(1\.6[5-9]|1\.[7-9]\d?|exceed|>\s*100|CNS\s*>\s*100|hypoxic)/i;
+  var SEVERE_RX = /(1\.6[5-9]|1\.[7-9]\d?|exceed|>\s*100|CNS\s*>\s*100|hypoxic|insufficient gas|not enough gas)/i;
 
-  function renderWarnings(result) {
+  /* UI-side advisories: any gas whose required pressure breaks the reserve
+     rule. Returned separately so they render with the engine warnings. */
+  function gasSupplyWarnings(result) {
+    var out = [];
+    (result.gasUsage || []).forEach(function (u) {
+      var g = gasById(u.gasId);
+      if (!g) return;
+      var sup = gasSupply(g, u.liters);
+      if (sup && !sup.ok) {
+        var pu = pressUnit();
+        out.push('Insufficient gas: ' + gasName(u) + ' (' + sup.cyl.preset.label +
+          ' @ ' + pressOut(sup.startBar) + ' ' + pu + ') needs ' + pressOut(sup.needBar) +
+          ' ' + pu + ' but only ' + pressOut(sup.usableBar) + ' ' + pu + ' is usable under ' +
+          sup.rule.label.toLowerCase() + ' — fill to ≥ ' + pressOut(sup.minStartBar) +
+          ' ' + pu + ' or use a larger cylinder');
+      }
+    });
+    return out;
+  }
+
+  function renderWarnings(result, extra) {
     var panel = $('panel-warnings');
     var list = $('warnings-list');
     clear(list);
-    var warnings = result.warnings || [];
+    var warnings = (result.warnings || []).concat(extra || []);
     panel.hidden = warnings.length === 0;
     warnings.forEach(function (w) {
       var severe = SEVERE_RX.test(w);
@@ -1010,8 +1174,21 @@
     lines.push('CNS ' + fmt(result.oxygen ? result.oxygen.cns : null, 0) + '%   OTU ' +
                fmt(result.oxygen ? result.oxygen.otu : null, 0) +
                '   MAX ppO2 ' + fmt(mx.ppO2, 2) + ' bar   MAX END ' + depthOut(mx.end) + ' ' + du);
+    var pu = pressUnit();
+    var rule = RESERVE_RULES[state.gasReserve] || RESERVE_RULES.thirds;
+    lines.push('');
+    lines.push('GAS SUPPLY  (' + rule.label + ')');
     (result.gasUsage || []).forEach(function (u) {
-      lines.push('GAS ' + pad(gasName(u), 8, true) + ' ' + volOut(u.liters) + ' ' + volUnit());
+      var g = gasById(u.gasId);
+      var sup = gasSupply(g || { type: 'bottom', cyl: 's80', startBar: 207 }, u.liters);
+      var verdict = sup.ok
+        ? 'OK +' + pressOut(sup.marginBar) + pu
+        : 'SHORT -' + pressOut(sup.needBar - sup.usableBar) + pu + ' (need ' + pressOut(sup.minStartBar) + pu + ')';
+      lines.push('  ' + pad(gasName(u), 8, true) +
+        pad(sup.cyl.preset.label, 14, true) +
+        pad('@' + pressOut(sup.startBar) + pu, 9, true) +
+        pad('need ' + pressOut(sup.needBar) + pu, 12, true) +
+        verdict);
     });
     (result.warnings || []).forEach(function (w) { lines.push('! ' + w); });
     return lines.join('\n');
@@ -1156,6 +1333,18 @@
       var g = state.gases[i];
       if (!g) return;
       var f = t.getAttribute('data-field');
+      if (f === 'startBar') {
+        // Cylinder fill does not affect the engine plan — only the supply
+        // readout. Update state and re-render the gas cards/warnings directly,
+        // without a debounced replan or rebuilding the gas inputs (keeps focus).
+        g.startBar = imperial() ? num(t.value) / BAR2PSI : num(t.value);
+        saveState();
+        if (lastGoodResult) {
+          renderGasUsage(lastGoodResult);
+          renderWarnings(lastGoodResult, gasSupplyWarnings(lastGoodResult));
+        }
+        return;
+      }
       if (f === 'fO2') g.fO2 = num(t.value) / 100;
       else if (f === 'fHe') g.fHe = num(t.value) / 100;
       else if (f === 'type') g.type = t.value;
@@ -1164,14 +1353,21 @@
     });
     $('gases-list').addEventListener('change', function (ev) {
       var t = ev.target;
-      if (t.tagName === 'SELECT' && t.getAttribute('data-gas') !== null) {
-        var i = parseInt(t.getAttribute('data-gas'), 10);
-        if (state.gases[i]) {
-          state.gases[i].type = t.value;
-          renderSegments();
-          onStateChanged({ refreshGas: true });
-        }
+      if (t.tagName !== 'SELECT' || t.getAttribute('data-gas') === null) return;
+      var i = parseInt(t.getAttribute('data-gas'), 10);
+      var g = state.gases[i];
+      if (!g) return;
+      var f = t.getAttribute('data-field');
+      if (f === 'cyl') {
+        // Adopt the new tank's rated fill when switching cylinder type.
+        var c = cylPreset(t.value);
+        if (c) { g.cyl = c.key; g.startBar = c.ratedBar; }
+        renderGases();          // refresh the start-pressure field
+      } else if (f === 'type') {
+        g.type = t.value;
       }
+      renderSegments();
+      onStateChanged({ refreshGas: true });
     });
     $('gases-list').addEventListener('click', function (ev) {
       var btn = ev.target.closest ? ev.target.closest('[data-remove-gas]') : null;
@@ -1184,9 +1380,11 @@
     });
     $('add-gas-btn').addEventListener('click', function () {
       var p = PRESETS[parseInt($('gas-preset').value, 10)] || PRESETS[0];
+      var defCyl = (p.type === 'deco') ? 's80' : 'd2x12';
       state.gases.push({
         id: uniqueGasId(p.key),
-        fO2: p.fO2, fHe: p.fHe, type: p.type
+        fO2: p.fO2, fHe: p.fHe, type: p.type,
+        cyl: defCyl, startBar: cylPreset(defCyl).ratedBar
       });
       renderGases();
       renderSegments();
@@ -1247,6 +1445,17 @@
         setSeg('water', pair[0]);
         onStateChanged({ refreshGas: true });
       });
+    });
+
+    // --- gas reserve rule (presentation-only: re-render cards from last plan)
+    $('gas-reserve').addEventListener('change', function () {
+      if (!RESERVE_RULES[this.value]) return;
+      state.gasReserve = this.value;
+      saveState();
+      if (lastGoodResult) {
+        renderGasUsage(lastGoodResult);
+        renderWarnings(lastGoodResult, gasSupplyWarnings(lastGoodResult));
+      }
     });
 
     // --- units toggle

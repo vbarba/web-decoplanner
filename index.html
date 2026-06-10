@@ -239,6 +239,14 @@
       <section class="panel reveal" id="panel-gas" aria-labelledby="gasreq-title">
         <div class="panel-head">
           <h2 class="panel-title" id="gasreq-title">Gas requirements</h2>
+          <div class="reserve-pick">
+            <label for="gas-reserve">RESERVE</label>
+            <select id="gas-reserve" aria-label="Gas reserve rule">
+              <option value="thirds">Rule of thirds</option>
+              <option value="half">Half + half</option>
+              <option value="none">No reserve</option>
+            </select>
+          </div>
         </div>
         <div id="gas-usage" class="gas-usage"></div>
       </section>

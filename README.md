@@ -32,6 +32,13 @@ calls. It implements two decompression models side by side:
   (N₂ + He stacked)
 - CNS% and OTU oxygen-toxicity tracking with advisories (e.g. ppO₂ > 1.6 bar)
 - Gas consumption planning from separate bottom/deco SAC rates
+- **Cylinder / gas-supply planning** — assign each gas a tank configuration
+  (AL80/S80, AL40, AL30, AL13 pony, 10/12/15/18 L singles, and twin sets
+  2×10 / 2×11 / 2×12 / 2×15 / 2×18 L) and a start pressure, choose a reserve
+  rule (rule of thirds, half + half, or none), and the planner shows the
+  pressure each cylinder needs, whether you have enough under the reserve,
+  the spare/shortfall in bar (or psi), and the minimum fill to make the dive —
+  raising an alert when any gas is short
 - Metric / imperial display toggle (internal math is always metric)
 - Settings: descent/ascent rates, last stop 3 m or 6 m, salt/fresh water,
   surface pressure, deco ppO₂ limit, SAC rates, and whether stated segment
