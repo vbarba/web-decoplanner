@@ -1,5 +1,7 @@
 # HALDANE — Decompression Planner
 
+**Live app: <https://vbarba.github.io/web-decoplanner/>**
+
 > ## ⚠️ SAFETY DISCLAIMER — READ FIRST
 >
 > **HALDANE is educational software. It has NEVER been validated for real dive
