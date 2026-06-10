@@ -68,8 +68,7 @@
         <h2 class="panel-title" id="gases-title">Gases</h2>
         <div id="gases-list" class="gases-list"></div>
         <div class="add-gas-row">
-          <label class="visually-hidden" for="gas-preset">Gas preset</label>
-          <select id="gas-preset"></select>
+          <div id="gas-preset-lb" class="lb-mount"></div>
           <button type="button" class="ghost-btn" id="add-gas-btn">+ ADD GAS</button>
         </div>
       </section>
@@ -240,12 +239,8 @@
         <div class="panel-head">
           <h2 class="panel-title" id="gasreq-title">Gas requirements</h2>
           <div class="reserve-pick">
-            <label for="gas-reserve">RESERVE</label>
-            <select id="gas-reserve" aria-label="Gas reserve rule">
-              <option value="thirds">Rule of thirds</option>
-              <option value="half">Half + half</option>
-              <option value="none">No reserve</option>
-            </select>
+            <span class="reserve-label" id="reserve-label">RESERVE</span>
+            <div id="gas-reserve-lb" class="lb-mount"></div>
           </div>
         </div>
         <div id="gas-usage" class="gas-usage"></div>
