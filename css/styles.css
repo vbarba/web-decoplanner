@@ -365,7 +365,17 @@ select {
   padding-right: 22px;
   cursor: pointer;
 }
-select option { background: var(--panel-solid); color: var(--ink); }
+/* Dropdown list: the open popup is OS-drawn, but these properties are
+   honored by Chrome/Edge/Firefox to keep it on-theme (dark + phosphor). */
+select option {
+  background: var(--panel-solid);
+  color: var(--ink);
+}
+select option:checked {
+  background: var(--panel-solid);
+  color: var(--phosphor);
+  font-weight: 700;
+}
 
 input[type="checkbox"] {
   appearance: none;
