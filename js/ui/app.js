@@ -1,0 +1,1317 @@
+/* =============================================================
+   HALDANE — UI shell (js/ui/app.js)
+   Talks to the engines ONLY through the shared API contract:
+     window.DecoEngine.plan(input) / window.VPMB.plan(input)
+     window.Charts.renderProfile(el, result, {units})
+     window.Charts.renderTissues(el, result, {units})
+   All internal state is METRIC; units conversion is display-only.
+   ============================================================= */
+(function () {
+  'use strict';
+
+  /* ----------------------------------------------------------
+     Constants
+  ---------------------------------------------------------- */
+  var LS_KEY = 'haldane-plan-v1';
+  var M2FT = 3.28084;
+  var L_PER_CUFT = 28.3168;
+  var STOP_INTERVAL = 3;       // m — fixed per contract
+  var MIN_STOP_TIME = 1;       // min
+  var GAS_SWITCH_STOP_TIME = 1;// min
+  var PPO2_BOTTOM_DISPLAY = 1.4; // MOD readout for bottom gases
+  var DEBOUNCE_MS = 300;
+  var OFFLINE_MSG = 'DECO ENGINE OFFLINE — displaying demonstration data only. Do not dive this plan.';
+
+  var PRESETS = [
+    { key: 'air',    label: 'Air',    fO2: 0.21, fHe: 0.00, type: 'bottom' },
+    { key: 'ean32',  label: 'EAN32',  fO2: 0.32, fHe: 0.00, type: 'bottom' },
+    { key: 'ean50',  label: 'EAN50',  fO2: 0.50, fHe: 0.00, type: 'deco'   },
+    { key: 'o2',     label: 'Oxygen', fO2: 1.00, fHe: 0.00, type: 'deco'   },
+    { key: 'tx2135', label: '21/35',  fO2: 0.21, fHe: 0.35, type: 'bottom' },
+    { key: 'tx1845', label: '18/45',  fO2: 0.18, fHe: 0.45, type: 'bottom' },
+    { key: 'tx1555', label: '15/55',  fO2: 0.15, fHe: 0.55, type: 'bottom' },
+    { key: 'tx1265', label: '12/65',  fO2: 0.12, fHe: 0.65, type: 'bottom' },
+    { key: 'tx1070', label: '10/70',  fO2: 0.10, fHe: 0.70, type: 'bottom' }
+  ];
+
+  function defaults() {
+    return {
+      units: 'metric',
+      algorithm: 'ZHL16C',
+      gfLow: 50, gfHigh: 80,
+      vpmConservatism: 2,
+      surfacePressure: 1.013,
+      water: 'salt',
+      descentRate: 18,
+      ascentRate: 9,
+      lastStopDepth: 6,
+      ppO2MaxDeco: 1.61,
+      segmentTimesIncludeTravel: true,
+      sacBottom: 20,
+      sacDeco: 16,
+      segments: [{ depth: 45, time: 25, gasId: 'tx2135' }],
+      gases: [
+        { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom' },
+        { id: 'ean50',  fO2: 0.50, fHe: 0.00, type: 'deco' },
+        { id: 'o2',     fO2: 1.00, fHe: 0.00, type: 'deco' }
+      ]
+    };
+  }
+
+  /* ----------------------------------------------------------
+     State
+  ---------------------------------------------------------- */
+  var state = defaults();
+  var lastResult = null;       // last result from engine/mock (any ok)
+  var lastGoodResult = null;   // last result with ok=true
+  var hasPlanned = false;      // live recompute only after 1st success
+  var gasSeq = 0;              // unique id counter for added gases
+  var planTimer = null;
+  var copyTimer = null;
+  var hasEngine = false, hasVPM = false, hasCharts = false;
+
+  var reduceMotion = false;
+  try {
+    reduceMotion = window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch (e) { /* ignore */ }
+
+  /* ----------------------------------------------------------
+     Tiny DOM + format helpers
+  ---------------------------------------------------------- */
+  function $(id) { return document.getElementById(id); }
+  function mk(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function fmt(x, d) {
+    if (x === null || x === undefined || !isFinite(x)) return '—';
+    return Number(x).toFixed(d === undefined ? 1 : d);
+  }
+  function num(v) { var n = parseFloat(v); return isFinite(n) ? n : NaN; }
+  function clampInt(v, lo, hi) {
+    var n = Math.round(num(v));
+    if (!isFinite(n)) return lo;
+    return Math.min(hi, Math.max(lo, n));
+  }
+
+  /* ----------------------------------------------------------
+     Units (display only — state & engine calls stay metric)
+  ---------------------------------------------------------- */
+  function imperial() { return state.units === 'imperial'; }
+  function depthOut(m, d) { return imperial() ? fmt(m * M2FT, d === undefined ? 0 : d) : fmt(m, d === undefined ? 0 : d); }
+  function depthIn(v) { var n = num(v); return imperial() ? n / M2FT : n; }
+  function depthUnit() { return imperial() ? 'ft' : 'm'; }
+  function rateOut(mpm) { return imperial() ? fmt(mpm * M2FT, 0) : fmt(mpm, 0); }
+  function rateIn(v) { var n = num(v); return imperial() ? n / M2FT : n; }
+  function rateUnit() { return imperial() ? 'ft/min' : 'm/min'; }
+  function sacOut(l) { return imperial() ? fmt(l / L_PER_CUFT, 2) : fmt(l, 0); }
+  function sacIn(v) { var n = num(v); return imperial() ? n * L_PER_CUFT : n; }
+  function sacUnit() { return imperial() ? 'ft³/min' : 'L/min'; }
+  function volOut(l) { return imperial() ? fmt(l / L_PER_CUFT, 1) : fmt(l, 0); }
+  function volUnit() { return imperial() ? 'ft³' : 'L'; }
+
+  /* ----------------------------------------------------------
+     Physics helpers for readouts (contract conventions)
+  ---------------------------------------------------------- */
+  function metersPerBar() { return state.water === 'fresh' ? 10.3 : 10.0; }
+  function pAmb(d) { return state.surfacePressure + d / metersPerBar(); }
+
+  function gasNameLocal(g) {
+    var o2 = Math.round(g.fO2 * 100);
+    var he = Math.round(g.fHe * 100);
+    if (he > 0) return o2 + '/' + he;
+    if (o2 >= 100) return 'OXYGEN';
+    if (o2 === 21) return 'AIR';
+    return 'EAN' + o2;
+  }
+  function gasName(g) {
+    if (!g) return '?';
+    if (hasEngine && typeof window.DecoEngine.gasName === 'function') {
+      try {
+        var n = window.DecoEngine.gasName(g);
+        if (typeof n === 'string' && n) return n;
+      } catch (e) { /* fall through */ }
+    }
+    return gasNameLocal(g);
+  }
+  function modLocal(g, ppO2) {
+    if (!g || !(g.fO2 > 0)) return null;
+    var raw = (ppO2 / g.fO2 - state.surfacePressure) * metersPerBar();
+    if (!isFinite(raw)) return null;
+    if (raw < 0) return 0;
+    return Math.floor(raw / STOP_INTERVAL) * STOP_INTERVAL;
+  }
+  function gasMod(g, ppO2) {
+    if (hasEngine && typeof window.DecoEngine.mod === 'function') {
+      try {
+        var m = window.DecoEngine.mod(g, ppO2,
+          { surfacePressure: state.surfacePressure, water: state.water });
+        if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 330) return m;
+      } catch (e) { /* fall through */ }
+    }
+    return modLocal(g, ppO2);
+  }
+  /* END counting O2 as narcotic (DecoPlanner convention) */
+  function endAt(d, g) {
+    var fHe = g ? g.fHe : 0;
+    var v = (pAmb(d) * (1 - fHe) - state.surfacePressure) * metersPerBar();
+    return Math.max(0, v);
+  }
+  function gasById(id) {
+    for (var i = 0; i < state.gases.length; i++) {
+      if (state.gases[i].id === id) return state.gases[i];
+    }
+    return null;
+  }
+
+  /* ----------------------------------------------------------
+     Persistence
+  ---------------------------------------------------------- */
+  function saveState() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* private mode */ }
+  }
+  function loadState() {
+    var raw = null;
+    try { raw = localStorage.getItem(LS_KEY); } catch (e) { /* ignore */ }
+    if (!raw) return;
+    var s;
+    try { s = JSON.parse(raw); } catch (e) { return; }
+    if (!s || typeof s !== 'object') return;
+    var d = defaults();
+    ['units', 'algorithm', 'water'].forEach(function (k) {
+      if (typeof s[k] === 'string') d[k] = s[k];
+    });
+    ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
+     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco']
+      .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
+    if (typeof s.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = s.segmentTimesIncludeTravel;
+    if (Array.isArray(s.gases) && s.gases.length) {
+      var gs = s.gases.filter(function (g) {
+        return g && typeof g.id === 'string' &&
+               typeof g.fO2 === 'number' && typeof g.fHe === 'number' &&
+               (g.type === 'bottom' || g.type === 'deco');
+      });
+      if (gs.length) d.gases = gs;
+    }
+    if (Array.isArray(s.segments) && s.segments.length) {
+      var segs = s.segments.filter(function (sg) {
+        return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
+               typeof sg.gasId === 'string';
+      });
+      if (segs.length) d.segments = segs;
+    }
+    if (d.units !== 'metric' && d.units !== 'imperial') d.units = 'metric';
+    if (d.algorithm !== 'ZHL16C' && d.algorithm !== 'VPMB') d.algorithm = 'ZHL16C';
+    if (d.water !== 'salt' && d.water !== 'fresh') d.water = 'salt';
+    if (d.lastStopDepth !== 3 && d.lastStopDepth !== 6) d.lastStopDepth = 6;
+    state = d;
+  }
+
+  /* ----------------------------------------------------------
+     Build the exact contract input object
+  ---------------------------------------------------------- */
+  function buildInput() {
+    return {
+      algorithm: state.algorithm,
+      gfLow: Math.round(state.gfLow),
+      gfHigh: Math.round(state.gfHigh),
+      vpmConservatism: Math.round(state.vpmConservatism),
+      surfacePressure: state.surfacePressure,
+      water: state.water,
+      descentRate: state.descentRate,
+      ascentRate: state.ascentRate,
+      stopInterval: STOP_INTERVAL,
+      lastStopDepth: state.lastStopDepth,
+      minStopTime: MIN_STOP_TIME,
+      gasSwitchStopTime: GAS_SWITCH_STOP_TIME,
+      ppO2MaxDeco: state.ppO2MaxDeco,
+      segmentTimesIncludeTravel: state.segmentTimesIncludeTravel,
+      segments: state.segments.map(function (s) {
+        return { depth: s.depth, time: s.time, gasId: s.gasId };
+      }),
+      gases: state.gases.map(function (g) {
+        return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type };
+      }),
+      sacBottom: state.sacBottom,
+      sacDeco: state.sacDeco
+    };
+  }
+
+  /* ==========================================================
+     MOCK RESULT — used ONLY when window.DecoEngine is undefined
+     (engine-load failure fallback; integration needs no changes:
+       result = window.DecoEngine ? DecoEngine.plan(input) : MOCK)
+     Realistic 45 m / 25 min 21/35 dive with 6 stops, EAN50 deco.
+     Matches the shared result contract field-for-field.
+  ========================================================== */
+  function buildMock(input) {
+    var sp = input.surfacePressure;
+    var mb = input.water === 'fresh' ? 10.3 : 10.0;
+    var GAS = {
+      tx2135: { fO2: 0.21, fHe: 0.35 },
+      ean50:  { fO2: 0.50, fHe: 0.00 },
+      o2:     { fO2: 1.00, fHe: 0.00 }
+    };
+    function pa(d) { return sp + d / mb; }
+    function po2(gid, d) { return GAS[gid].fO2 * pa(d); }
+
+    var rows = [];
+    var ceilV = [{ t: 0, c: 0 }]; // fabricated, plausible ceiling vertices
+    var t = 0;
+    function row(phase, d0, d1, dur, gid, ceil) {
+      t += dur;
+      rows.push({
+        phase: phase, startDepth: d0, endDepth: d1, duration: dur,
+        runtime: t, gasId: gid,
+        ppO2Start: po2(gid, d0), ppO2End: po2(gid, d1)
+      });
+      ceilV.push({ t: t, c: ceil });
+    }
+
+    var ar = input.ascentRate || 9;
+    row('desc', 0, 45, 45 / (input.descentRate || 18), 'tx2135', 0);
+    row('level', 45, 45, 25 - 45 / (input.descentRate || 18), 'tx2135', 18.5);
+    row('asc', 45, 21, 24 / ar, 'tx2135', 18.5);
+    row('switch', 21, 21, 0, 'ean50', 18.5);
+    var stopsDef = [[21, 1, 'ean50'], [18, 1, 'ean50'], [15, 2, 'ean50'],
+                    [12, 3, 'ean50'], [9, 5, 'ean50'], [6, 12, 'o2']];
+    for (var i = 0; i < stopsDef.length; i++) {
+      var d = stopsDef[i][0], st = stopsDef[i][1], gid = stopsDef[i][2];
+      if (gid !== rows[rows.length - 1].gasId) row('switch', d, d, 0, gid, d);
+      var next = (i + 1 < stopsDef.length) ? stopsDef[i + 1][0] : 0;
+      row('stop', d, d, st, gid, next === 0 ? 0 : next);
+      row('asc', d, next, (d - next) / ar, gid, next === 0 ? 0 : next);
+    }
+
+    var stops = [];
+    rows.forEach(function (r) {
+      if (r.phase === 'stop') {
+        stops.push({ depth: r.startDepth, time: r.time === undefined ? Math.round(r.duration) : r.time, runtime: r.runtime, gasId: r.gasId });
+      }
+    });
+
+    // gas usage per contract: sac(phase) * avg(Pamb) * duration
+    var usage = { tx2135: 0, ean50: 0, o2: 0 };
+    rows.forEach(function (r) {
+      var sac = (r.phase === 'desc' || r.phase === 'level') ? input.sacBottom : input.sacDeco;
+      usage[r.gasId] += sac * (pa(r.startDepth) + pa(r.endDepth)) / 2 * r.duration;
+    });
+    var gasUsage = Object.keys(GAS).map(function (gid) {
+      return { gasId: gid, fO2: GAS[gid].fO2, fHe: GAS[gid].fHe, liters: usage[gid] };
+    });
+
+    // oxygen toxicity, NOAA CNS table + OTU formula from the contract
+    var CNS_T = [[0.5, Infinity], [0.6, 720], [0.7, 570], [0.8, 450], [0.9, 360],
+                 [1.0, 300], [1.1, 240], [1.2, 210], [1.3, 180], [1.4, 150],
+                 [1.5, 120], [1.6, 45]];
+    function cnsMax(p) {
+      if (p <= 0.5) return Infinity;
+      if (p >= 1.6) return Math.max(1, 45 - 750 * (p - 1.6));
+      for (var k = 1; k < CNS_T.length; k++) {
+        if (p <= CNS_T[k][0]) {
+          var p0 = CNS_T[k - 1][0], p1 = CNS_T[k][0];
+          var m0 = CNS_T[k - 1][1], m1 = CNS_T[k][1];
+          if (!isFinite(m0)) m0 = 900;
+          return m0 + (m1 - m0) * (p - p0) / (p1 - p0);
+        }
+      }
+      return 45;
+    }
+    var cns = 0, otu = 0;
+    rows.forEach(function (r) {
+      var p = (r.ppO2Start + r.ppO2End) / 2;
+      if (r.duration <= 0) return;
+      cns += r.duration / cnsMax(p) * 100;
+      if (p > 0.5) otu += r.duration * Math.pow((p - 0.5) / 0.5, 0.833);
+    });
+
+    // fine-grained profile + ceiling samples (step <= 0.5 min, all vertices)
+    var profile = [], ceilingProfile = [];
+    function ceilAt(tt) {
+      for (var k = 1; k < ceilV.length; k++) {
+        if (tt <= ceilV[k].t + 1e-9) {
+          var a = ceilV[k - 1], b = ceilV[k];
+          if (b.t - a.t < 1e-9) return b.c;
+          return a.c + (b.c - a.c) * (tt - a.t) / (b.t - a.t);
+        }
+      }
+      return 0;
+    }
+    var t0 = 0, d0 = 0;
+    profile.push({ t: 0, depth: 0, gasId: rows[0].gasId });
+    ceilingProfile.push({ t: 0, ceiling: 0 });
+    rows.forEach(function (r) {
+      var t1 = r.runtime;
+      var steps = Math.max(1, Math.ceil((t1 - t0) / 0.5));
+      for (var k = 1; k <= steps; k++) {
+        var tt = Math.min(t1, t0 + (t1 - t0) * k / steps);
+        var dd = r.startDepth + (r.endDepth - r.startDepth) * ((tt - t0) / Math.max(t1 - t0, 1e-9));
+        profile.push({ t: tt, depth: dd, gasId: r.gasId });
+        ceilingProfile.push({ t: tt, ceiling: Math.max(0, ceilAt(tt)) });
+      }
+      t0 = t1; d0 = r.endDepth;
+    });
+
+    var finalTissues = [];
+    for (var c = 0; c < 16; c++) {
+      var pN2 = 1.35 - c * 0.034;
+      var pHe = 0.05 + 0.13 * Math.exp(-c / 3.2);
+      finalTissues.push({
+        pN2: pN2, pHe: pHe, pTotal: pN2 + pHe,
+        gfSurfacePct: input.algorithm === 'VPMB' ? null : Math.round(76 - c * 3.4)
+      });
+    }
+
+    var stopTime = 0;
+    stops.forEach(function (s) { stopTime += s.time; });
+    var ascAbove = 0;
+    rows.forEach(function (r) {
+      if (r.phase === 'asc' && r.startDepth <= 21) ascAbove += r.duration;
+    });
+
+    return {
+      ok: true,
+      errors: [],
+      warnings: ['Demonstration data — deco engine module not loaded'],
+      algorithm: input.algorithm,
+      params: {
+        gfLow: input.gfLow, gfHigh: input.gfHigh,
+        vpmConservatism: input.vpmConservatism,
+        lastStopDepth: input.lastStopDepth,
+        surfacePressure: sp, water: input.water
+      },
+      table: rows,
+      stops: stops.map(function (s, i2) {
+        return { depth: s.depth, time: stopsDef[i2][1], runtime: s.runtime, gasId: s.gasId };
+      }),
+      noDeco: false,
+      ndl: null,
+      firstStopDepth: 21,
+      totalRuntime: t,
+      totalDecoTime: stopTime + ascAbove,
+      gasUsage: gasUsage,
+      oxygen: { cns: cns, otu: otu },
+      profile: profile,
+      ceilingProfile: ceilingProfile,
+      finalTissues: finalTissues
+    };
+  }
+  /* ================== end MOCK ================== */
+
+  /* ----------------------------------------------------------
+     Validation (metric internally; messages in display units)
+  ---------------------------------------------------------- */
+  function validate() {
+    var errors = [];
+    var fields = {};
+    function bad(key, msg) { fields[key] = true; if (msg) errors.push(msg); }
+
+    if (!state.segments.length) errors.push('At least one dive segment is required');
+    state.segments.forEach(function (s, i) {
+      var n = i + 1;
+      if (!(s.depth >= 1 && s.depth <= 200)) {
+        bad('seg-' + i + '-depth', 'Segment ' + n + ': depth must be ' +
+          depthOut(1) + '–' + depthOut(200) + ' ' + depthUnit());
+      }
+      if (!(s.time >= 1 && s.time <= 999)) {
+        bad('seg-' + i + '-time', 'Segment ' + n + ': time must be 1–999 min');
+      }
+      if (!gasById(s.gasId)) {
+        bad('seg-' + i + '-gas', 'Segment ' + n + ': gas no longer exists');
+      }
+    });
+
+    if (!state.gases.length) errors.push('At least one gas is required');
+    var hasBottom = false;
+    state.gases.forEach(function (g, i) {
+      var n = i + 1;
+      if (g.type === 'bottom') hasBottom = true;
+      if (!(g.fO2 > 0 && g.fO2 <= 1)) bad('gas-' + i + '-o2', 'Gas ' + n + ': O₂ must be 1–100%');
+      if (!(g.fHe >= 0 && g.fHe < 1)) bad('gas-' + i + '-he', 'Gas ' + n + ': He must be 0–99%');
+      if (g.fO2 + g.fHe > 1.0001) {
+        bad('gas-' + i + '-o2');
+        bad('gas-' + i + '-he', 'Gas ' + n + ' (' + gasName(g) + '): O₂ + He exceeds 100%');
+      }
+    });
+    if (state.gases.length && !hasBottom) errors.push('At least one BOTTOM gas is required');
+
+    if (state.algorithm === 'ZHL16C') {
+      if (!(state.gfLow >= 5 && state.gfLow <= 100)) bad('gfLow', 'GF low must be 5–100');
+      if (!(state.gfHigh >= 5 && state.gfHigh <= 100)) bad('gfHigh', 'GF high must be 5–100');
+      if (state.gfLow > state.gfHigh) { bad('gfLow'); bad('gfHigh', 'GF low cannot exceed GF high'); }
+    }
+    if (!(state.descentRate >= 1 && state.descentRate <= 30)) bad('descentRate', 'Descent rate must be ' + rateOut(1) + '–' + rateOut(30) + ' ' + rateUnit());
+    if (!(state.ascentRate >= 1 && state.ascentRate <= 30)) bad('ascentRate', 'Ascent rate must be ' + rateOut(1) + '–' + rateOut(30) + ' ' + rateUnit());
+    if (!(state.surfacePressure >= 0.5 && state.surfacePressure <= 1.2)) bad('surfacePressure', 'Surface pressure must be 0.5–1.2 bar');
+    if (!(state.ppO2MaxDeco >= 0.4 && state.ppO2MaxDeco <= 2)) bad('ppO2MaxDeco', 'Deco ppO₂ limit must be 0.4–2.0 bar');
+    if (!(state.sacBottom >= 1 && state.sacBottom <= 100)) bad('sacBottom', 'Bottom SAC out of range');
+    if (!(state.sacDeco >= 1 && state.sacDeco <= 100)) bad('sacDeco', 'Deco SAC out of range');
+
+    return { errors: errors, fields: fields };
+  }
+
+  function applyValidation() {
+    var v = validate();
+    var nodes = document.querySelectorAll('.rail [data-vkey]');
+    for (var i = 0; i < nodes.length; i++) {
+      var k = nodes[i].getAttribute('data-vkey');
+      nodes[i].classList.toggle('invalid', !!v.fields[k]);
+    }
+    // gas over-100% tint
+    var gasRows = document.querySelectorAll('#gases-list .gas-row');
+    for (var j = 0; j < gasRows.length; j++) {
+      var g = state.gases[j];
+      gasRows[j].classList.toggle('gas-overfull', !!g && (g.fO2 + g.fHe > 1.0001));
+    }
+    var btn = $('plan-btn'), wrap = $('plan-wrap'), reason = $('plan-reason');
+    var blocked = v.errors.length > 0;
+    btn.disabled = blocked;
+    wrap.title = blocked ? v.errors.join('\n') : '';
+    reason.hidden = !blocked;
+    reason.textContent = blocked ? v.errors[0] : '';
+    return v;
+  }
+
+  /* ----------------------------------------------------------
+     LEFT RAIL rendering
+  ---------------------------------------------------------- */
+  function gasOption(g, selectedId) {
+    var o = mk('option', null, gasName(g) + (g.type === 'deco' ? ' · deco' : ''));
+    o.value = g.id;
+    if (g.id === selectedId) o.selected = true;
+    return o;
+  }
+
+  function renderSegments() {
+    var body = $('segments-body');
+    clear(body);
+    state.segments.forEach(function (s, i) {
+      var tr = mk('tr');
+
+      var tdD = mk('td', 'col-depth');
+      var inD = mk('input');
+      inD.type = 'number'; inD.min = '1'; inD.step = '1'; inD.inputMode = 'decimal';
+      inD.value = depthOut(s.depth);
+      inD.setAttribute('data-seg', i); inD.setAttribute('data-field', 'depth');
+      inD.setAttribute('data-vkey', 'seg-' + i + '-depth');
+      inD.setAttribute('aria-label', 'Segment ' + (i + 1) + ' depth (' + depthUnit() + ')');
+      tdD.appendChild(inD);
+
+      var tdT = mk('td', 'col-time');
+      var inT = mk('input');
+      inT.type = 'number'; inT.min = '1'; inT.max = '999'; inT.step = '1'; inT.inputMode = 'numeric';
+      inT.value = fmt(s.time, 0);
+      inT.setAttribute('data-seg', i); inT.setAttribute('data-field', 'time');
+      inT.setAttribute('data-vkey', 'seg-' + i + '-time');
+      inT.setAttribute('aria-label', 'Segment ' + (i + 1) + ' time (minutes)');
+      tdT.appendChild(inT);
+
+      var tdG = mk('td');
+      var sel = mk('select');
+      sel.setAttribute('data-seg', i); sel.setAttribute('data-field', 'gasId');
+      sel.setAttribute('data-vkey', 'seg-' + i + '-gas');
+      sel.setAttribute('aria-label', 'Segment ' + (i + 1) + ' gas');
+      state.gases.forEach(function (g) { sel.appendChild(gasOption(g, s.gasId)); });
+      tdG.appendChild(sel);
+
+      var tdX = mk('td');
+      var rm = mk('button', 'icon-btn', '✕');
+      rm.type = 'button';
+      rm.setAttribute('data-remove-seg', i);
+      rm.setAttribute('aria-label', 'Remove segment ' + (i + 1));
+      rm.title = 'Remove level';
+      tdX.appendChild(rm);
+
+      tr.appendChild(tdD); tr.appendChild(tdT); tr.appendChild(tdG); tr.appendChild(tdX);
+      body.appendChild(tr);
+    });
+  }
+
+  function gasReadoutText(g) {
+    var isDeco = g.type === 'deco';
+    var pp = isDeco ? state.ppO2MaxDeco : PPO2_BOTTOM_DISPLAY;
+    var m = gasMod(g, pp);
+    var modTxt = (m === null) ? '—' : depthOut(m) + ' ' + depthUnit();
+    var endTxt = (m === null) ? '—' : depthOut(endAt(m, g)) + ' ' + depthUnit();
+    return { mod: modTxt, end: endTxt, pp: pp };
+  }
+
+  function renderGases() {
+    var list = $('gases-list');
+    clear(list);
+    state.gases.forEach(function (g, i) {
+      var row = mk('div', 'gas-row');
+
+      var fo = mk('div', 'gas-frac');
+      var inO = mk('input');
+      inO.type = 'number'; inO.min = '1'; inO.max = '100'; inO.step = '1'; inO.inputMode = 'numeric';
+      inO.value = Math.round(g.fO2 * 100);
+      inO.setAttribute('data-gas', i); inO.setAttribute('data-field', 'fO2');
+      inO.setAttribute('data-vkey', 'gas-' + i + '-o2');
+      inO.setAttribute('aria-label', 'Gas ' + (i + 1) + ' oxygen percent');
+      fo.appendChild(inO);
+      fo.appendChild(mk('span', 'frac-tag', 'O₂'));
+
+      var fh = mk('div', 'gas-frac');
+      var inH = mk('input');
+      inH.type = 'number'; inH.min = '0'; inH.max = '99'; inH.step = '1'; inH.inputMode = 'numeric';
+      inH.value = Math.round(g.fHe * 100);
+      inH.setAttribute('data-gas', i); inH.setAttribute('data-field', 'fHe');
+      inH.setAttribute('data-vkey', 'gas-' + i + '-he');
+      inH.setAttribute('aria-label', 'Gas ' + (i + 1) + ' helium percent');
+      fh.appendChild(inH);
+      fh.appendChild(mk('span', 'frac-tag', 'He'));
+
+      var name = mk('span', 'gas-name', gasName(g));
+      name.setAttribute('data-gasname', i);
+
+      var rm = mk('button', 'icon-btn', '✕');
+      rm.type = 'button';
+      rm.setAttribute('data-remove-gas', i);
+      rm.setAttribute('aria-label', 'Remove gas ' + gasName(g));
+      rm.title = 'Remove gas';
+
+      var meta = mk('div', 'gas-meta');
+      var sel = mk('select', 'gas-type');
+      sel.setAttribute('data-gas', i); sel.setAttribute('data-field', 'type');
+      sel.setAttribute('aria-label', 'Gas ' + (i + 1) + ' role');
+      var ob = mk('option', null, 'BOTTOM'); ob.value = 'bottom';
+      var od = mk('option', null, 'DECO'); od.value = 'deco';
+      if (g.type === 'bottom') ob.selected = true; else od.selected = true;
+      sel.appendChild(ob); sel.appendChild(od);
+
+      var ro = gasReadoutText(g);
+      var modSpan = mk('span', 'gas-readout');
+      modSpan.setAttribute('data-gasmod', i);
+      modSpan.innerHTML = 'MOD <b>' + ro.mod + '</b> @' + fmt(ro.pp, 2);
+      var endSpan = mk('span', 'gas-readout');
+      endSpan.setAttribute('data-gasend', i);
+      endSpan.innerHTML = 'END <b>' + ro.end + '</b>';
+
+      meta.appendChild(sel); meta.appendChild(modSpan); meta.appendChild(endSpan);
+
+      row.appendChild(fo); row.appendChild(fh); row.appendChild(name); row.appendChild(rm);
+      row.appendChild(meta);
+      list.appendChild(row);
+    });
+  }
+
+  /* refresh computed gas labels/MOD/END without rebuilding inputs */
+  function refreshGasReadouts() {
+    state.gases.forEach(function (g, i) {
+      var name = document.querySelector('[data-gasname="' + i + '"]');
+      if (name) name.textContent = gasName(g);
+      var ro = gasReadoutText(g);
+      var modSpan = document.querySelector('[data-gasmod="' + i + '"]');
+      if (modSpan) modSpan.innerHTML = 'MOD <b>' + ro.mod + '</b> @' + fmt(ro.pp, 2);
+      var endSpan = document.querySelector('[data-gasend="' + i + '"]');
+      if (endSpan) endSpan.innerHTML = 'END <b>' + ro.end + '</b>';
+    });
+  }
+
+  function renderAlgo() {
+    var zhl = state.algorithm === 'ZHL16C';
+    $('algo-zhl').classList.toggle('active', zhl);
+    $('algo-zhl').setAttribute('aria-pressed', String(zhl));
+    $('algo-vpm').classList.toggle('active', !zhl);
+    $('algo-vpm').setAttribute('aria-pressed', String(!zhl));
+    $('zhl-controls').hidden = !zhl;
+    $('vpm-controls').hidden = zhl;
+    $('gf-low-num').value = state.gfLow;
+    $('gf-low-range').value = state.gfLow;
+    $('gf-high-num').value = state.gfHigh;
+    $('gf-high-range').value = state.gfHigh;
+    $('vpm-value').textContent = '+' + state.vpmConservatism;
+  }
+
+  function renderSettings() {
+    $('set-descent').value = rateOut(state.descentRate);
+    $('set-ascent').value = rateOut(state.ascentRate);
+    $('set-sp').value = state.surfacePressure;
+    $('set-ppo2').value = state.ppO2MaxDeco;
+    $('set-sac-bottom').value = sacOut(state.sacBottom);
+    $('set-sac-deco').value = sacOut(state.sacDeco);
+    $('set-incl-travel').checked = state.segmentTimesIncludeTravel;
+    setSeg('laststop', state.lastStopDepth === 3 ? 'laststop-3' : 'laststop-6');
+    setSeg('water', state.water === 'salt' ? 'water-salt' : 'water-fresh');
+    $('laststop-3').textContent = imperial() ? '10 ft' : '3 m';
+    $('laststop-6').textContent = imperial() ? '20 ft' : '6 m';
+  }
+
+  function setSeg(group, activeId) {
+    var ids = group === 'laststop' ? ['laststop-3', 'laststop-6']
+            : group === 'water' ? ['water-salt', 'water-fresh']
+            : ['units-metric', 'units-imperial'];
+    ids.forEach(function (id) {
+      var on = id === activeId;
+      $(id).classList.toggle('active', on);
+      $(id).setAttribute('aria-pressed', String(on));
+    });
+  }
+
+  function renderUnitLabels() {
+    var d = depthUnit(), r = rateUnit(), s = sacUnit();
+    var i, ns;
+    ns = document.querySelectorAll('.u-depth'); for (i = 0; i < ns.length; i++) ns[i].textContent = d;
+    ns = document.querySelectorAll('.u-depth-tile'); for (i = 0; i < ns.length; i++) ns[i].textContent = d;
+    ns = document.querySelectorAll('.u-rate'); for (i = 0; i < ns.length; i++) ns[i].textContent = r;
+    ns = document.querySelectorAll('.u-sac'); for (i = 0; i < ns.length; i++) ns[i].textContent = s;
+    setSeg('units', imperial() ? 'units-imperial' : 'units-metric');
+  }
+
+  function renderBadge() {
+    var b = $('algo-badge');
+    b.textContent = state.algorithm === 'VPMB'
+      ? 'VPM-B · +' + state.vpmConservatism
+      : 'ZHL-16C · GF ' + Math.round(state.gfLow) + '/' + Math.round(state.gfHigh);
+  }
+
+  function renderPresets() {
+    var sel = $('gas-preset');
+    clear(sel);
+    PRESETS.forEach(function (p, i) {
+      var o = mk('option', null, p.label);
+      o.value = String(i);
+      sel.appendChild(o);
+    });
+  }
+
+  function renderRail() {
+    renderSegments();
+    renderGases();
+    renderAlgo();
+    renderSettings();
+    renderUnitLabels();
+    renderBadge();
+  }
+
+  /* ----------------------------------------------------------
+     Plan execution
+  ---------------------------------------------------------- */
+  function runPlan(animate) {
+    var v = applyValidation();
+    if (v.errors.length) return;
+    var input = buildInput();
+    var result;
+    var usedMock = false;
+    try {
+      if (state.algorithm === 'VPMB' && hasVPM) {
+        result = window.VPMB.plan(input);
+      } else if (hasEngine) {
+        result = window.DecoEngine.plan(input);
+      } else {
+        result = buildMock(input); // MOCK: only when DecoEngine is undefined
+        usedMock = true;
+      }
+    } catch (err) {
+      showBanner('ENGINE FAULT — ' + (err && err.message ? err.message : 'unknown error'), true);
+      result = { ok: false, errors: ['Engine exception: ' + (err && err.message ? err.message : err)], warnings: [] };
+    }
+    lastResult = result;
+    if (result && result.ok) {
+      lastGoodResult = result;
+      hasPlanned = true;
+      if (usedMock) showBanner(OFFLINE_MSG, false);
+      else hideBanner(); // also clears a previous fault banner
+    }
+    renderResults(result, animate);
+  }
+
+  function schedulePlan() {
+    if (!hasPlanned) return;
+    if (planTimer) clearTimeout(planTimer);
+    planTimer = setTimeout(function () {
+      planTimer = null;
+      runPlan(false);
+    }, DEBOUNCE_MS);
+  }
+
+  /* called after any state mutation from the form */
+  function onStateChanged(opts) {
+    opts = opts || {};
+    saveState();
+    renderBadge();
+    if (opts.refreshGas) refreshGasReadouts();
+    applyValidation();
+    schedulePlan();
+  }
+
+  /* ----------------------------------------------------------
+     RESULTS rendering
+  ---------------------------------------------------------- */
+  function resultGasMeta(result) {
+    var map = {};
+    (result.gasUsage || []).forEach(function (u) {
+      map[u.gasId] = { fO2: u.fO2, fHe: u.fHe, name: gasName(u) };
+    });
+    state.gases.forEach(function (g) {
+      if (!map[g.id]) map[g.id] = { fO2: g.fO2, fHe: g.fHe, name: gasName(g) };
+    });
+    return map;
+  }
+
+  function renderResults(result, animate) {
+    if (!result) return;
+    var resultsEl = $('results');
+    var errPanel = $('panel-errors');
+
+    if (!result.ok) {
+      var list = $('errors-list');
+      clear(list);
+      (result.errors || ['Plan failed']).forEach(function (e) {
+        var li = mk('li');
+        li.appendChild(mk('span', 'warn-glyph', '✕'));
+        li.appendChild(mk('span', 'warn-tag', 'ERROR'));
+        li.appendChild(mk('span', null, e));
+        list.appendChild(li);
+      });
+      errPanel.hidden = false;
+      errPanel.classList.add('revealed');
+      resultsEl.classList.add('stale');
+      return;
+    }
+
+    errPanel.hidden = true;
+    resultsEl.classList.remove('stale');
+
+    renderTiles(result, animate);
+    renderTable(result, animate);
+    renderGasUsage(result);
+    renderWarnings(result);
+    renderCharts(result);
+    if (animate) revealPanels();
+  }
+
+  function maxima(result) {
+    var meta = resultGasMeta(result);
+    var maxPp = 0, maxEnd = 0;
+    (result.table || []).forEach(function (r) {
+      maxPp = Math.max(maxPp, r.ppO2Start || 0, r.ppO2End || 0);
+      var g = meta[r.gasId];
+      if (g) maxEnd = Math.max(maxEnd, endAt(Math.max(r.startDepth, r.endDepth), g));
+    });
+    return { ppO2: maxPp, end: maxEnd };
+  }
+
+  function renderTiles(result, animate) {
+    var mx = maxima(result);
+    countUp($('tile-runtime'), result.totalRuntime, 1, animate);
+    countUp($('tile-deco'), result.totalDecoTime, 1, animate);
+
+    var fs = $('tile-firststop');
+    if (result.noDeco) {
+      fs.textContent = 'NDL ' + fmt(result.ndl, 0);
+      fs.parentNode.querySelector('.tile-unit').textContent = 'MIN LEFT';
+    } else {
+      fs.textContent = result.firstStopDepth === null ? '—' : depthOut(result.firstStopDepth);
+      fs.parentNode.querySelector('.tile-unit').textContent = depthUnit();
+    }
+
+    var cns = result.oxygen ? result.oxygen.cns : null;
+    var otu = result.oxygen ? result.oxygen.otu : null;
+    var cnsEl = $('tile-cns');
+    cnsEl.textContent = fmt(cns, 0);
+    cnsEl.classList.toggle('caution', cns !== null && cns > 80 && cns <= 100);
+    cnsEl.classList.toggle('danger', cns !== null && cns > 100);
+    $('tile-otu').textContent = fmt(otu, 0);
+
+    var endEl = $('tile-end');
+    endEl.textContent = depthOut(mx.end);
+    endEl.classList.toggle('caution', mx.end > 30);
+
+    var ppEl = $('tile-ppo2');
+    ppEl.textContent = fmt(mx.ppO2, 2);
+    ppEl.classList.toggle('caution', mx.ppO2 > 1.4 && mx.ppO2 <= 1.65);
+    ppEl.classList.toggle('danger', mx.ppO2 > 1.65);
+  }
+
+  var GLYPH = { desc: '▼', level: '▶', asc: '▲', stop: '◉', switch: '⇄' };
+
+  function rowDepthText(r) {
+    if (r.startDepth !== r.endDepth) {
+      return depthOut(r.startDepth) + ' → ' + depthOut(r.endDepth);
+    }
+    return depthOut(r.endDepth);
+  }
+
+  function renderTable(result, animate) {
+    var body = $('runtime-body');
+    var meta = resultGasMeta(result);
+    clear(body);
+    body.classList.remove('cascade');
+    (result.table || []).forEach(function (r, i) {
+      var tr = mk('tr', 'row-' + r.phase);
+      tr.style.setProperty('--i', Math.min(i, 26));
+
+      var tdDepth = mk('td');
+      var glyph = mk('span', 'phase-glyph', GLYPH[r.phase] || '');
+      glyph.setAttribute('aria-hidden', 'true');
+      tdDepth.appendChild(glyph);
+      tdDepth.appendChild(document.createTextNode(rowDepthText(r)));
+      tr.appendChild(tdDepth);
+
+      var durTxt = r.phase === 'stop' ? fmt(r.duration, 0)
+                 : (r.duration > 0 ? fmt(r.duration, 1) : '—');
+      tr.appendChild(mk('td', null, durTxt));
+      tr.appendChild(mk('td', null, fmt(r.runtime, 1)));
+
+      var g = meta[r.gasId];
+      var gname = g ? g.name : (r.gasId || '?');
+      tr.appendChild(mk('td', null, r.phase === 'switch' ? 'GAS → ' + gname : gname));
+      tr.appendChild(mk('td', null, fmt(r.ppO2End, 2)));
+      body.appendChild(tr);
+    });
+    if (animate && !reduceMotion) body.classList.add('cascade');
+  }
+
+  function renderGasUsage(result) {
+    var host = $('gas-usage');
+    clear(host);
+    var usage = result.gasUsage || [];
+    var max = 0;
+    usage.forEach(function (u) { max = Math.max(max, u.liters); });
+    usage.forEach(function (u) {
+      var card = mk('div', 'gas-card');
+      var head = mk('div', 'gas-card-head');
+      head.appendChild(mk('span', 'gas-card-name', gasName(u)));
+      head.appendChild(mk('span', 'gas-card-amt num', volOut(u.liters) + ' ' + volUnit()));
+      var bar = mk('div', 'gas-bar');
+      var fill = mk('span');
+      fill.style.width = (max > 0 ? Math.max(2, u.liters / max * 100) : 0) + '%';
+      bar.appendChild(fill);
+      card.appendChild(head);
+      card.appendChild(bar);
+      card.appendChild(mk('div', 'gas-card-sub',
+        'fO₂ ' + fmt(u.fO2, 2) + ' · fHe ' + fmt(u.fHe, 2)));
+      host.appendChild(card);
+    });
+  }
+
+  var SEVERE_RX = /(1\.6[5-9]|1\.[7-9]\d?|exceed|>\s*100|CNS\s*>\s*100|hypoxic)/i;
+
+  function renderWarnings(result) {
+    var panel = $('panel-warnings');
+    var list = $('warnings-list');
+    clear(list);
+    var warnings = result.warnings || [];
+    panel.hidden = warnings.length === 0;
+    warnings.forEach(function (w) {
+      var severe = SEVERE_RX.test(w);
+      var li = mk('li', severe ? 'severe' : null);
+      li.appendChild(mk('span', 'warn-glyph', severe ? '✕' : '⚠'));
+      li.appendChild(mk('span', 'warn-tag', severe ? 'ALERT' : 'CAUTION'));
+      li.appendChild(mk('span', null, w));
+      list.appendChild(li);
+    });
+  }
+
+  function renderCharts(result) {
+    if (!hasCharts) return;
+    var opts = { units: state.units };
+    try { window.Charts.renderProfile($('profile-chart'), result, opts); }
+    catch (e) { if (window.console) console.warn('Charts.renderProfile failed:', e); }
+    try { window.Charts.renderTissues($('tissue-chart'), result, opts); }
+    catch (e) { if (window.console) console.warn('Charts.renderTissues failed:', e); }
+  }
+
+  /* ----------------------------------------------------------
+     Motion: count-up + stagger reveal
+  ---------------------------------------------------------- */
+  function countUp(el, target, decimals, animate) {
+    if (target === null || target === undefined || !isFinite(target)) {
+      el.textContent = '—';
+      el.removeAttribute('data-v');
+      return;
+    }
+    var from = num(el.getAttribute('data-v'));
+    if (!isFinite(from)) from = 0;
+    el.setAttribute('data-v', target);
+    if (!animate || reduceMotion || Math.abs(target - from) < 0.05) {
+      el.textContent = fmt(target, decimals);
+      return;
+    }
+    var t0 = null, dur = 650;
+    function tick(ts) {
+      if (t0 === null) t0 = ts;
+      var p = Math.min(1, (ts - t0) / dur);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmt(from + (target - from) * eased, decimals);
+      if (p < 1) window.requestAnimationFrame(tick);
+    }
+    window.requestAnimationFrame(tick);
+  }
+
+  function revealPanels() {
+    var panels = document.querySelectorAll('.results .reveal');
+    var visible = [];
+    var i;
+    for (i = 0; i < panels.length; i++) {
+      if (!panels[i].hidden) visible.push(panels[i]);
+      panels[i].classList.remove('revealed');
+    }
+    if (reduceMotion) {
+      for (i = 0; i < panels.length; i++) panels[i].classList.add('revealed');
+      return;
+    }
+    // force reflow so the transition restarts
+    void document.body.offsetWidth;
+    visible.forEach(function (p, idx) {
+      p.style.setProperty('--reveal-delay', (idx * 60) + 'ms');
+      p.classList.add('revealed');
+    });
+  }
+
+  /* ----------------------------------------------------------
+     COPY plan as monospace text
+  ---------------------------------------------------------- */
+  function pad(s, w, right) {
+    s = String(s);
+    while (s.length < w) s = right ? s + ' ' : ' ' + s;
+    return s;
+  }
+  function planText(result) {
+    var meta = resultGasMeta(result);
+    var lines = [];
+    var algoLine = result.algorithm === 'VPMB'
+      ? 'VPM-B +' + (result.params ? result.params.vpmConservatism : state.vpmConservatism)
+      : 'ZHL-16C+GF ' + (result.params ? result.params.gfLow + '/' + result.params.gfHigh : '');
+    lines.push('HALDANE DECOMPRESSION PLAN');
+    lines.push('MODEL ' + algoLine + '  WATER ' + state.water.toUpperCase() +
+               '  SP ' + fmt(state.surfacePressure, 3) + ' bar  UNITS ' + state.units.toUpperCase());
+    lines.push('GASES ' + state.gases.map(function (g) {
+      return gasName(g) + ' (' + g.type + ')';
+    }).join(' / '));
+    lines.push('');
+    var du = depthUnit();
+    lines.push(pad('PH', 3, true) + pad('DEPTH ' + du, 13) + pad('DUR', 7) + pad('RUN', 8) + '  ' + pad('GAS', 8, true) + pad('ppO2', 6));
+    lines.push('-------------------------------------------------');
+    var PH = { desc: 'v', level: '-', asc: '^', stop: '*', switch: '>' };
+    (result.table || []).forEach(function (r) {
+      var depth = r.startDepth !== r.endDepth
+        ? depthOut(r.startDepth) + '>' + depthOut(r.endDepth)
+        : depthOut(r.endDepth);
+      var g = meta[r.gasId];
+      lines.push(
+        pad(PH[r.phase] || ' ', 3, true) +
+        pad(depth, 13) +
+        pad(r.phase === 'stop' ? fmt(r.duration, 0) : fmt(r.duration, 1), 7) +
+        pad(fmt(r.runtime, 1), 8) + '  ' +
+        pad(g ? g.name : r.gasId, 8, true) +
+        pad(fmt(r.ppO2End, 2), 6)
+      );
+    });
+    lines.push('-------------------------------------------------');
+    lines.push('RUNTIME ' + fmt(result.totalRuntime, 1) + ' min   DECO ' + fmt(result.totalDecoTime, 1) + ' min');
+    var mx = maxima(result);
+    lines.push('CNS ' + fmt(result.oxygen ? result.oxygen.cns : null, 0) + '%   OTU ' +
+               fmt(result.oxygen ? result.oxygen.otu : null, 0) +
+               '   MAX ppO2 ' + fmt(mx.ppO2, 2) + ' bar   MAX END ' + depthOut(mx.end) + ' ' + du);
+    (result.gasUsage || []).forEach(function (u) {
+      lines.push('GAS ' + pad(gasName(u), 8, true) + ' ' + volOut(u.liters) + ' ' + volUnit());
+    });
+    (result.warnings || []).forEach(function (w) { lines.push('! ' + w); });
+    return lines.join('\n');
+  }
+
+  function copyPlan() {
+    if (!lastGoodResult) return;
+    var text = planText(lastGoodResult);
+    function done(okFlag) {
+      var btn = $('copy-btn');
+      btn.textContent = okFlag ? 'COPIED ✓' : 'COPY FAILED';
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(function () { btn.textContent = 'COPY'; }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var okFlag = document.execCommand('copy');
+      document.body.removeChild(ta);
+      done(okFlag);
+    } catch (e) { done(false); }
+  }
+
+  /* ----------------------------------------------------------
+     Banner / external-module guards
+  ---------------------------------------------------------- */
+  function showBanner(msg, isAlert) {
+    var b = $('banner');
+    b.textContent = msg;
+    b.classList.toggle('alert', !!isAlert);
+    b.hidden = false;
+  }
+  function hideBanner() { $('banner').hidden = true; }
+
+  function detectModules() {
+    hasEngine = !!(window.DecoEngine && typeof window.DecoEngine.plan === 'function');
+    hasVPM = !!(window.VPMB && typeof window.VPMB.plan === 'function');
+    hasCharts = !!(window.Charts &&
+      typeof window.Charts.renderProfile === 'function' &&
+      typeof window.Charts.renderTissues === 'function');
+
+    if (!hasEngine) {
+      showBanner(OFFLINE_MSG, false);
+    }
+    if (!hasVPM) {
+      var vb = $('algo-vpm');
+      vb.disabled = true;
+      vb.title = 'VPM-B engine module not loaded';
+      vb.setAttribute('aria-disabled', 'true');
+      if (state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
+    }
+    if (!hasCharts) {
+      $('panel-profile').hidden = true;
+      $('panel-tissue').hidden = true;
+    }
+    var parts = [];
+    parts.push(hasEngine ? '<span class="ok">ZHL ●</span>' : '<span class="off">ZHL ○</span>');
+    parts.push(hasVPM ? '<span class="ok">VPM ●</span>' : '<span class="off">VPM ○</span>');
+    parts.push(hasCharts ? '<span class="ok">CHARTS ●</span>' : '<span class="off">CHARTS ○</span>');
+    var ver = (hasEngine && window.DecoEngine.VERSION) ? (' · ENGINE v' + window.DecoEngine.VERSION) : '';
+    $('status-line').innerHTML = 'MODULES&nbsp;&nbsp;' + parts.join('&nbsp;&nbsp;') + ver;
+  }
+
+  /* ----------------------------------------------------------
+     Decorative depth-ruler labels
+  ---------------------------------------------------------- */
+  function buildRuler() {
+    var ruler = $('depth-ruler');
+    if (!ruler) return;
+    for (var i = 0; i <= 30; i++) {
+      var lbl = mk('span', 'ruler-label', i * 10);
+      lbl.style.top = (i * 70) + 'px';
+      ruler.appendChild(lbl);
+    }
+  }
+
+  /* ----------------------------------------------------------
+     Events
+  ---------------------------------------------------------- */
+  function uniqueGasId(base) {
+    var id = base, n = 2;
+    while (gasById(id)) { id = base + '-' + n; n++; }
+    return id;
+  }
+
+  function bindEvents() {
+    // --- segments (delegated)
+    $('segments-body').addEventListener('input', function (ev) {
+      var t = ev.target;
+      if (t.getAttribute('data-seg') === null) return;
+      var i = parseInt(t.getAttribute('data-seg'), 10);
+      var f = t.getAttribute('data-field');
+      var s = state.segments[i];
+      if (!s) return;
+      if (f === 'depth') s.depth = depthIn(t.value);
+      else if (f === 'time') s.time = num(t.value);
+      else if (f === 'gasId') s.gasId = t.value;
+      onStateChanged();
+    });
+    $('segments-body').addEventListener('change', function (ev) {
+      var t = ev.target;
+      if (t.tagName === 'SELECT' && t.getAttribute('data-seg') !== null) {
+        var i = parseInt(t.getAttribute('data-seg'), 10);
+        if (state.segments[i]) { state.segments[i].gasId = t.value; onStateChanged(); }
+      }
+    });
+    $('segments-body').addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-remove-seg]') : null;
+      if (!btn) return;
+      var i = parseInt(btn.getAttribute('data-remove-seg'), 10);
+      state.segments.splice(i, 1);
+      renderSegments();
+      onStateChanged();
+    });
+    $('add-level-btn').addEventListener('click', function () {
+      var prev = state.segments[state.segments.length - 1];
+      state.segments.push({
+        depth: prev ? prev.depth : 30,
+        time: 10,
+        gasId: prev ? prev.gasId : (state.gases[0] ? state.gases[0].id : '')
+      });
+      renderSegments();
+      onStateChanged();
+    });
+
+    // --- gases (delegated)
+    $('gases-list').addEventListener('input', function (ev) {
+      var t = ev.target;
+      if (t.getAttribute('data-gas') === null) return;
+      var i = parseInt(t.getAttribute('data-gas'), 10);
+      var g = state.gases[i];
+      if (!g) return;
+      var f = t.getAttribute('data-field');
+      if (f === 'fO2') g.fO2 = num(t.value) / 100;
+      else if (f === 'fHe') g.fHe = num(t.value) / 100;
+      else if (f === 'type') g.type = t.value;
+      renderSegments(); // gas labels inside segment selects may change
+      onStateChanged({ refreshGas: true });
+    });
+    $('gases-list').addEventListener('change', function (ev) {
+      var t = ev.target;
+      if (t.tagName === 'SELECT' && t.getAttribute('data-gas') !== null) {
+        var i = parseInt(t.getAttribute('data-gas'), 10);
+        if (state.gases[i]) {
+          state.gases[i].type = t.value;
+          renderSegments();
+          onStateChanged({ refreshGas: true });
+        }
+      }
+    });
+    $('gases-list').addEventListener('click', function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-remove-gas]') : null;
+      if (!btn) return;
+      var i = parseInt(btn.getAttribute('data-remove-gas'), 10);
+      state.gases.splice(i, 1);
+      renderGases();
+      renderSegments();
+      onStateChanged();
+    });
+    $('add-gas-btn').addEventListener('click', function () {
+      var p = PRESETS[parseInt($('gas-preset').value, 10)] || PRESETS[0];
+      state.gases.push({
+        id: uniqueGasId(p.key),
+        fO2: p.fO2, fHe: p.fHe, type: p.type
+      });
+      renderGases();
+      renderSegments();
+      onStateChanged();
+    });
+
+    // --- algorithm
+    $('algo-zhl').addEventListener('click', function () {
+      state.algorithm = 'ZHL16C'; renderAlgo(); onStateChanged();
+    });
+    $('algo-vpm').addEventListener('click', function () {
+      if (this.disabled) return;
+      state.algorithm = 'VPMB'; renderAlgo(); onStateChanged();
+    });
+    function bindGf(numId, rangeId, key) {
+      $(numId).addEventListener('input', function () {
+        state[key] = clampInt(this.value, 5, 100);
+        $(rangeId).value = state[key];
+        onStateChanged();
+      });
+      $(rangeId).addEventListener('input', function () {
+        state[key] = clampInt(this.value, 5, 100);
+        $(numId).value = state[key];
+        onStateChanged();
+      });
+    }
+    bindGf('gf-low-num', 'gf-low-range', 'gfLow');
+    bindGf('gf-high-num', 'gf-high-range', 'gfHigh');
+    $('vpm-minus').addEventListener('click', function () {
+      state.vpmConservatism = Math.max(0, state.vpmConservatism - 1);
+      $('vpm-value').textContent = '+' + state.vpmConservatism;
+      onStateChanged();
+    });
+    $('vpm-plus').addEventListener('click', function () {
+      state.vpmConservatism = Math.min(5, state.vpmConservatism + 1);
+      $('vpm-value').textContent = '+' + state.vpmConservatism;
+      onStateChanged();
+    });
+
+    // --- settings
+    $('set-descent').addEventListener('input', function () { state.descentRate = rateIn(this.value); onStateChanged(); });
+    $('set-ascent').addEventListener('input', function () { state.ascentRate = rateIn(this.value); onStateChanged(); });
+    $('set-sp').addEventListener('input', function () { state.surfacePressure = num(this.value); onStateChanged({ refreshGas: true }); });
+    $('set-ppo2').addEventListener('input', function () { state.ppO2MaxDeco = num(this.value); onStateChanged({ refreshGas: true }); });
+    $('set-sac-bottom').addEventListener('input', function () { state.sacBottom = sacIn(this.value); onStateChanged(); });
+    $('set-sac-deco').addEventListener('input', function () { state.sacDeco = sacIn(this.value); onStateChanged(); });
+    $('set-incl-travel').addEventListener('change', function () { state.segmentTimesIncludeTravel = this.checked; onStateChanged(); });
+    [['laststop-3', 3], ['laststop-6', 6]].forEach(function (pair) {
+      $(pair[0]).addEventListener('click', function () {
+        state.lastStopDepth = pair[1];
+        setSeg('laststop', pair[0]);
+        onStateChanged();
+      });
+    });
+    [['water-salt', 'salt'], ['water-fresh', 'fresh']].forEach(function (pair) {
+      $(pair[0]).addEventListener('click', function () {
+        state.water = pair[1];
+        setSeg('water', pair[0]);
+        onStateChanged({ refreshGas: true });
+      });
+    });
+
+    // --- units toggle
+    [['units-metric', 'metric'], ['units-imperial', 'imperial']].forEach(function (pair) {
+      $(pair[0]).addEventListener('click', function () {
+        if (state.units === pair[1]) return;
+        state.units = pair[1];
+        saveState();
+        renderRail();        // re-display all inputs in new units
+        applyValidation();
+        if (lastGoodResult) {
+          renderResults(lastGoodResult, false); // redraw results + charts in new units
+        }
+      });
+    });
+
+    // --- header / primary actions
+    $('reset-btn').addEventListener('click', function () {
+      try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
+      var units = state.units; // resetting the plan shouldn't flip display units
+      state = defaults();
+      state.units = units;
+      if (!hasVPM && state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
+      renderRail();
+      saveState();
+      applyValidation();
+      runPlan(true);
+    });
+    $('plan-btn').addEventListener('click', function () { runPlan(true); });
+    $('copy-btn').addEventListener('click', copyPlan);
+
+    // re-render charts on resize (debounced) so they can refit
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      if (!hasCharts || !lastGoodResult) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () { renderCharts(lastGoodResult); }, 250);
+    });
+  }
+
+  /* ----------------------------------------------------------
+     Init — must never throw
+  ---------------------------------------------------------- */
+  function init() {
+    buildRuler();
+    loadState();
+    detectModules(); // may coerce algorithm if VPM missing
+    renderPresets();
+    renderRail();
+    bindEvents();
+    var v = applyValidation();
+    if (!v.errors.length) {
+      runPlan(true); // first plan on load (mock if engines absent)
+    } else {
+      // invalid restored state: leave results empty, panels stay unrevealed
+      revealPanels();
+    }
+  }
+
+  try {
+    init();
+  } catch (err) {
+    try {
+      showBanner('UI FAULT — ' + (err && err.message ? err.message : 'initialization failed'), true);
+    } catch (e2) { /* nothing more we can do */ }
+    if (window.console) console.error('HALDANE init failed:', err);
+  }
+})();
