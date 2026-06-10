@@ -59,14 +59,19 @@
     return null;
   }
 
-  /* Reserve rules. usable = the fraction of the START gas you may consume;
-     need ≤ start × usable must hold. Rule of thirds keeps 1/3 in reserve
-     (consume 2/3); "× 1.5" sizes the fill at 1.5× the need (consume 2/3 of
-     start, equivalent to thirds but framed as a fill target); half keeps 50%. */
+  /* Reserve rules.
+     - Fraction rules (kind 'frac'): usable = the fraction of the START gas you
+       may consume; need ≤ start × usable must hold. Thirds keeps 1/3 (consume
+       2/3); half keeps 50%; none allows all.
+     - Min-gas rule (kind 'mingas', "rock bottom"): reserve a FIXED volume — the
+       gas two divers breathe ascending from the deepest point to the first gas
+       switch (×2 for an out-of-air donation), at the configured bottom SAC.
+       Applies to the bottom gas; deco gases fall back to thirds. */
   var RESERVE_RULES = {
-    none:   { usable: 1.00, label: 'No reserve',     short: 'all usable' },
-    thirds: { usable: 2 / 3, label: 'Rule of thirds', short: '⅓ reserve' },
-    half:   { usable: 0.50, label: 'Half + half',    short: '½ reserve' }
+    none:   { kind: 'frac', usable: 1.00, label: 'No reserve',      short: 'all usable' },
+    thirds: { kind: 'frac', usable: 2 / 3, label: 'Rule of thirds',  short: '⅓ reserve' },
+    half:   { kind: 'frac', usable: 0.50, label: 'Half + half',     short: '½ reserve' },
+    mingas: { kind: 'mingas', label: 'Min gas (bottom→switch ×2)', short: 'min gas ×2' }
   };
   var BAR2PSI = 14.5037744;
   function pressOut(bar) { return imperial() ? Math.round(bar * BAR2PSI) : Math.round(bar); }
@@ -632,14 +637,58 @@
     var startBar = (g && isFinite(g.startBar) && g.startBar > 0) ? g.startBar : c.ratedBar;
     return { preset: c, startBar: startBar, capacityL: c.liters * startBar };
   }
-  /* Returns null if the gas was never breathed, else a full supply report. */
-  function gasSupply(g, litersUsed) {
+
+  /* "Rock bottom" minimum gas: the surface-equivalent liters two divers breathe
+     ascending from the deepest point of the dive to the first gas-switch depth
+     (or the surface if there is no switch), at the configured bottom SAC.
+       liters = 2 × sacBottom × ascentMinutes × avgAmbientPressure(deep→switch)
+     Returns { liters, fromDepth, toDepth } or null when it can't be computed.
+     Derived from the plan profile so it tracks the actual dive. */
+  function minGasReserve(result) {
+    if (!result || !result.table) return null;
+    var deepest = 0;
+    result.table.forEach(function (r) {
+      deepest = Math.max(deepest, r.startDepth || 0, r.endDepth || 0);
+    });
+    if (deepest <= 0) return null;
+    // First gas switch on ascent = shallowest depth at which a 'switch' row sits
+    // at or below the deepest depth; if none, ascend all the way to the surface.
+    var switchDepth = 0;
+    var switchRows = result.table.filter(function (r) { return r.phase === 'switch'; });
+    if (switchRows.length) {
+      // the deepest switch is the first one reached on the way up
+      switchDepth = switchRows.reduce(function (m, r) { return Math.max(m, r.startDepth); }, 0);
+    }
+    if (switchDepth >= deepest) switchDepth = 0;   // pathological; reserve to surface
+    var ascentMin = (deepest - switchDepth) / (state.ascentRate > 0 ? state.ascentRate : 9);
+    var avgP = (pAmb(deepest) + pAmb(switchDepth)) / 2;
+    var liters = 2 * state.sacBottom * ascentMin * avgP;
+    return { liters: liters, fromDepth: deepest, toDepth: switchDepth, ascentMin: ascentMin };
+  }
+
+  /* Returns null if the gas was never breathed, else a full supply report.
+     `ctx` (optional) carries cross-gas context: { minGas, bottomGasId } so the
+     min-gas rule can apply its fixed reserve to the bottom gas. */
+  function gasSupply(g, litersUsed, ctx) {
     if (!g) return null;
     var rule = RESERVE_RULES[state.gasReserve] || RESERVE_RULES.thirds;
     var cyl = gasCylinder(g);
     var needBar = cyl.preset.liters > 0 ? litersUsed / cyl.preset.liters : Infinity;
-    var usableBar = cyl.startBar * rule.usable;
-    var reserveBar = cyl.startBar - usableBar;
+
+    var reserveBar, reserveLiters = null, isMinGas = false;
+    if (rule.kind === 'mingas' && ctx && ctx.minGas && ctx.bottomGasId === g.id) {
+      // Fixed-volume reserve on the bottom gas: convert liters → bar of THIS tank.
+      isMinGas = true;
+      reserveLiters = ctx.minGas.liters;
+      reserveBar = cyl.preset.liters > 0 ? reserveLiters / cyl.preset.liters : Infinity;
+    } else if (rule.kind === 'mingas') {
+      // Deco gas (or no bottom-gas match): min-gas doesn't model donate-gas on a
+      // stage; fall back to thirds so the card still gives sensible guidance.
+      reserveBar = cyl.startBar * (1 / 3);
+    } else {
+      reserveBar = cyl.startBar * (1 - rule.usable);
+    }
+    var usableBar = cyl.startBar - reserveBar;
     var usedFrac = cyl.startBar > 0 ? needBar / cyl.startBar : 1;   // of full tank
     var ok = needBar <= usableBar + 1e-6;
     var marginBar = usableBar - needBar;          // bar of usable gas left over
@@ -648,9 +697,10 @@
       litersUsed: litersUsed,
       capacityL: cyl.capacityL,
       needBar: needBar, usableBar: usableBar, reserveBar: reserveBar,
+      reserveLiters: reserveLiters, isMinGas: isMinGas,
       startBar: cyl.startBar, usedFrac: usedFrac, ok: ok, marginBar: marginBar,
       // smallest whole-bar fill that satisfies the reserve rule, for advice
-      minStartBar: rule.usable > 0 ? Math.ceil(needBar / rule.usable) : Infinity
+      minStartBar: Math.ceil(needBar + reserveBar)
     };
   }
 
@@ -1188,14 +1238,30 @@
     }
   }
 
+  /* Cross-gas context for the supply rules: the rock-bottom volume and which
+     gas it applies to (the deepest segment's gas = what you breathe at depth). */
+  function supplyContext(result) {
+    var bottomGasId = null;
+    if (result && result.table) {
+      var deepest = -1;
+      result.table.forEach(function (r) {
+        if ((r.phase === 'level' || r.phase === 'desc') && r.endDepth > deepest) {
+          deepest = r.endDepth; bottomGasId = r.gasId;
+        }
+      });
+    }
+    return { minGas: minGasReserve(result), bottomGasId: bottomGasId };
+  }
+
   function renderGasUsage(result) {
     var host = $('gas-usage');
     clear(host);
     var usage = result.gasUsage || [];
+    var ctx = supplyContext(result);
 
     usage.forEach(function (u) {
       var g = gasById(u.gasId) || { type: 'bottom', cyl: 's80', startBar: 207, fO2: u.fO2, fHe: u.fHe };
-      var sup = gasSupply(g, u.liters);
+      var sup = gasSupply(g, u.liters, ctx);
       var card = mk('div', 'gas-card' + (sup && !sup.ok ? ' gas-short' : ''));
 
       // header: gas name + cylinder label, and the required pressure (the
@@ -1236,10 +1302,17 @@
       card.appendChild(verdict);
 
       // detail line: cylinder, start fill, reserve rule, surface volume
-      card.appendChild(mk('div', 'gas-card-sub',
-        sup.cyl.preset.label + ' @ ' + pressOut(startBar) + ' ' + pressUnit() +
+      var detail = sup.cyl.preset.label + ' @ ' + pressOut(startBar) + ' ' + pressUnit() +
         ' · ' + sup.rule.short +
-        ' · ' + volOut(u.liters) + ' ' + volUnit() + ' used'));
+        ' · ' + volOut(u.liters) + ' ' + volUnit() + ' used';
+      card.appendChild(mk('div', 'gas-card-sub', detail));
+      // For the min-gas reserve, spell out the reserve volume + ascent it covers.
+      if (sup.isMinGas && ctx.minGas) {
+        card.appendChild(mk('div', 'gas-card-sub',
+          'reserve ' + pressOut(sup.reserveBar) + ' ' + pressUnit() + ' (' +
+          volOut(sup.reserveLiters) + ' ' + volUnit() + ', 2 divers ' +
+          depthOut(ctx.minGas.fromDepth) + '→' + depthOut(ctx.minGas.toDepth) + ' ' + depthUnit() + ')'));
+      }
       host.appendChild(card);
     });
 
@@ -1254,10 +1327,11 @@
      rule. Returned separately so they render with the engine warnings. */
   function gasSupplyWarnings(result) {
     var out = [];
+    var ctx = supplyContext(result);
     (result.gasUsage || []).forEach(function (u) {
       var g = gasById(u.gasId);
       if (!g) return;
-      var sup = gasSupply(g, u.liters);
+      var sup = gasSupply(g, u.liters, ctx);
       if (sup && !sup.ok) {
         var pu = pressUnit();
         out.push('Insufficient gas: ' + gasName(u) + ' (' + sup.cyl.preset.label +
@@ -1389,11 +1463,12 @@
                '   MAX ppO2 ' + fmt(mx.ppO2, 2) + ' bar   MAX END ' + depthOut(mx.end) + ' ' + du);
     var pu = pressUnit();
     var rule = RESERVE_RULES[state.gasReserve] || RESERVE_RULES.thirds;
+    var supCtx = supplyContext(result);
     lines.push('');
     lines.push('GAS SUPPLY  (' + rule.label + ')');
     (result.gasUsage || []).forEach(function (u) {
       var g = gasById(u.gasId);
-      var sup = gasSupply(g || { type: 'bottom', cyl: 's80', startBar: 207 }, u.liters);
+      var sup = gasSupply(g || { type: 'bottom', cyl: 's80', startBar: 207 }, u.liters, supCtx);
       var verdict = sup.ok
         ? 'OK +' + pressOut(sup.marginBar) + pu
         : 'SHORT -' + pressOut(sup.needBar - sup.usableBar) + pu + ' (need ' + pressOut(sup.minStartBar) + pu + ')';
