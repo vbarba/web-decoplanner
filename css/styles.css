@@ -870,6 +870,64 @@ input[type="range"]::-moz-range-thumb {
   to   { opacity: 1; transform: none; }
 }
 
+/* ---- editable runtime table (verify mode) ---- */
+.table-tools { display: flex; align-items: center; gap: 8px; }
+
+.runtime-table td input,
+.runtime-table td select {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: center;
+}
+.runtime-table td.cs-depth, .runtime-table td.cs-time { white-space: nowrap; }
+.runtime-table td.cs-depth input { width: 48px; display: inline-block; }
+.runtime-table td.cs-time input { width: 52px; }
+.runtime-table td .cs-unit { color: var(--dim); font-size: 9px; margin-left: 4px; }
+.runtime-table td .cs-gas { display: inline-block; width: auto; min-width: 78px; }
+.runtime-table td .cs-remove { margin-left: 6px; vertical-align: middle; }
+
+.row-custom td { background: rgba(53, 224, 194, .05); }
+.row-custom-foot td { padding-top: 8px; text-align: left; }
+.row-custom-foot .cs-add { width: auto; font-size: 10px; padding: 5px 10px; }
+
+.row-violation td {
+  color: var(--alert) !important;
+  background: rgba(255, 93, 108, .07) !important;
+  text-shadow: none !important;
+}
+.row-violation td:first-child { box-shadow: inset 2px 0 0 var(--alert) !important; }
+.row-violation .phase-glyph.warn { color: var(--alert); }
+
+/* safety verdict chip in the table panel head */
+.verify-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  margin-right: 8px;
+  margin-bottom: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .03em;
+  padding: 3px 9px;
+  border-radius: 3px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.verify-verdict.ok {
+  color: var(--phosphor);
+  border-color: rgba(53, 224, 194, .4);
+  background: rgba(53, 224, 194, .08);
+  text-shadow: var(--glow);
+}
+.verify-verdict.bad {
+  color: var(--alert);
+  border-color: rgba(255, 93, 108, .45);
+  background: rgba(255, 93, 108, .08);
+}
+.verify-verdict .vv-glyph { font-weight: 700; }
+
 /* =============================================================
    CHARTS
    ============================================================= */

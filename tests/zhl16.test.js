@@ -525,5 +525,81 @@ const ref = DecoEngine.plan(baseInput());
 })();
 
 // ---------------------------------------------------------------------------
+// VERIFY MODE (custom-stop replay)
+// ---------------------------------------------------------------------------
+
+// Seed custom stops from a computed plan exactly as the UI does: merge the
+// switch + stop holds at each depth into one editable row (gas = last gas held
+// there, time = total hold). This reproduces the computed schedule faithfully.
+function seedCustomStops(result) {
+  const byDepth = [];
+  (result.table || []).forEach(function (x) {
+    if (x.phase !== 'switch' && x.phase !== 'stop') return;
+    let e = byDepth.find(function (d) { return Math.abs(d.depth - x.startDepth) < 1e-6; });
+    if (!e) { e = { depth: x.startDepth, time: 0, gasId: x.gasId }; byDepth.push(e); }
+    e.time += x.duration; e.gasId = x.gasId;
+  });
+  return byDepth;
+}
+
+(function () {
+  const gen = DecoEngine.plan(baseInput());
+  check('generate path has verify === null', gen.verify === null, JSON.stringify(gen.verify));
+
+  // 1. Round-trip identity: feed the computed schedule back as customStops.
+  const cs = seedCustomStops(gen);
+  const rt = DecoEngine.plan(baseInput({ customStops: cs }));
+  check('verify round-trip ok', rt.ok, JSON.stringify(rt.errors));
+  check('verify round-trip is safe', rt.verify && rt.verify.safe === true,
+    JSON.stringify(rt.verify));
+  check('verify round-trip exceedance ~0', rt.verify && rt.verify.maxCeilingExceedance <= 0.5,
+    'exceed=' + (rt.verify && rt.verify.maxCeilingExceedance));
+  check('verify round-trip runtime matches generate', Math.abs(rt.totalRuntime - gen.totalRuntime) < 0.6,
+    'verify=' + rt.totalRuntime.toFixed(2) + ' generate=' + gen.totalRuntime.toFixed(2));
+
+  // 2. Unsafe: drop the shallowest (longest) stop's time to 1 min — well short
+  //    of the obligation, so the ceiling is clearly violated near the surface.
+  const cut = cs.map(function (s) {
+    return Math.abs(s.depth - cs[cs.length - 1].depth) < 1e-6 ? { depth: s.depth, time: 1, gasId: s.gasId } : s;
+  });
+  const un = DecoEngine.plan(baseInput({ customStops: cut }));
+  check('verify shortened is unsafe', un.ok && un.verify && un.verify.safe === false,
+    JSON.stringify(un.verify));
+  check('verify shortened exceedance > 0.5', un.verify && un.verify.maxCeilingExceedance > 0.5,
+    'exceed=' + (un.verify && un.verify.maxCeilingExceedance));
+  check('verify shortened has finite firstViolationDepth',
+    un.verify && isFinite(un.verify.firstViolationDepth));
+  check('verify shortened pushes a ceiling warning',
+    un.warnings.some(function (w) { return /ceiling/i.test(w); }), JSON.stringify(un.warnings));
+
+  // 3. Gas change recompute: breathe the 6 m stop on ean50 instead of o2.
+  const swapGas = cs.map(function (s) {
+    return Math.abs(s.depth - 6) < 1e-6 ? { depth: s.depth, time: s.time, gasId: 'ean50' } : s;
+  });
+  const gc = DecoEngine.plan(baseInput({ customStops: swapGas }));
+  const stop6 = gc.table.filter(function (r) { return r.phase === 'stop' && Math.abs(r.startDepth - 6) < 1e-6; })[0];
+  check('verify gas change: 6 m stop breathes ean50', stop6 && stop6.gasId === 'ean50',
+    stop6 && stop6.gasId);
+  check('verify gas change: ppO2 at 6 m reflects ean50 (~0.8 bar)',
+    stop6 && Math.abs(stop6.ppO2End - 0.50 * (1.013 + 6 / 10)) < 1e-6, stop6 && stop6.ppO2End);
+  check('verify gas change: CNS differs from o2 round-trip', Math.abs(gc.oxygen.cns - rt.oxygen.cns) > 1e-6);
+
+  // 4. Off-grid / out-of-order depths are accepted and replayed.
+  const odd = DecoEngine.plan(baseInput({
+    customStops: [{ depth: 13, time: 2, gasId: 'ean50' }, { depth: 9, time: 4, gasId: 'ean50' },
+                  { depth: 6, time: 12, gasId: 'o2' }]
+  }));
+  check('verify off-grid (13 m) stop accepted, ok', odd.ok, JSON.stringify(odd.errors));
+  check('verify off-grid: a stop row exists at 13 m',
+    odd.table.some(function (r) { return r.phase === 'stop' && Math.abs(r.startDepth - 13) < 1e-6; }));
+  check('verify off-grid: verify verdict populated', odd.verify && typeof odd.verify.safe === 'boolean');
+
+  // 5. Structurally invalid custom stops are rejected.
+  const bad = DecoEngine.plan(baseInput({ customStops: [{ depth: 6, time: 5, gasId: 'nope' }] }));
+  check('verify rejects unknown gas', !bad.ok && bad.errors.some(function (e) { return /unknown gas/.test(e); }),
+    JSON.stringify(bad.errors));
+})();
+
+// ---------------------------------------------------------------------------
 console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);

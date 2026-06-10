@@ -26,7 +26,8 @@ top of `js/engine/zhl16.js` — read it before touching either engine. Summary:
 (bar), `water` (`salt`/`fresh`), `descentRate`/`ascentRate`, `stopInterval`,
 `lastStopDepth` (3 or 6), `minStopTime`, `gasSwitchStopTime`, `ppO2MaxDeco`,
 `segmentTimesIncludeTravel`, `segments:[{depth,time,gasId}]`,
-`gases:[{id,fO2,fHe,type}]`, `sacBottom`/`sacDeco`.
+`gases:[{id,fO2,fHe,type}]`, `sacBottom`/`sacDeco`, and optionally
+`customStops:[{depth,time,gasId}]` (verify mode — see below).
 
 **`result`:** `ok`, `errors[]`, `warnings[]`, `algorithm`, `params` (echo),
 `table[]` (every movement; `phase ∈ desc|level|asc|switch|stop`, with
@@ -34,7 +35,24 @@ top of `js/engine/zhl16.js` — read it before touching either engine. Summary:
 `noDeco`, `ndl`, `firstStopDepth`, `totalRuntime`, `totalDecoTime`,
 `gasUsage[]` (surface-equivalent liters per gas), `oxygen:{cns,otu}`,
 `profile[]` (fine samples ≤0.5 min), `ceilingProfile[]`, `finalTissues[]` (16
-compartments; `gfSurfacePct` for ZHL, `null` for VPM).
+compartments; `gfSurfacePct` for ZHL, `null` for VPM), and `verify` (verify mode
+only, else `null`).
+
+**Verify mode (editable runtime table).** If `input.customStops` (ordered
+deepest→shallowest `[{depth,time,gasId}]`) is present, `plan()` *replays that
+exact deco schedule* instead of generating one — each row's gas is breathed
+travelling up to and held at that depth; the final ascent uses the last row's
+gas. No auto-switching, no re-optimization (verify-exact); off-grid/out-of-order
+depths are accepted and replayed. The generate path is untouched (it runs
+whenever `customStops` is absent). The result then carries
+`verify = { safe, maxCeilingExceedance (m above ceiling, 0 if clear),
+firstViolationDepth, firstViolationTime }` and a "ceiling" warning when unsafe.
+Both engines implement this additively (ZHL: `replayCustomStops`; VPM-B:
+`replayCustomStopsVPM`, which reuses the start-of-ascent gradients and skips the
+CVA loop). The UI seeds editable rows from a computed plan by merging each
+depth's switch + stop holds (`seedCustomStopsFromResult` in `app.js`); a custom
+schedule is **kept and re-verified** when dive inputs change (not auto-cleared),
+and RESET TO COMPUTED clears `customStops` back to the generated plan.
 
 **Both engines implement these behaviors identically — change one, mirror the
 other:** travel at descent/ascent rates; `segmentTimesIncludeTravel` deducts

@@ -3,6 +3,22 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## Editable runtime table = engine "verify mode", not UI re-optimization
+
+The editable runtime table is backed by a **verify-exact** capability added to
+both engines (`input.customStops` → replay the schedule literally, report a
+`verify` verdict), *not* by the UI re-running the generator with constraints.
+Rationale: the user wants "is MY exact schedule safe?", like replaying a profile
+on a dive computer — edits must never be silently corrected. Verify mode is
+additive (gated on `customStops`; the generate path is byte-for-byte unchanged,
+so all golden tests stay green) and reuses each engine's bottom simulation +
+aggregation verbatim, swapping only the ascent. The UI seeds editable rows from
+the computed plan by merging switch + stop holds per depth (so a faithful
+round-trip reproduces the computed runtime exactly), and a custom schedule is
+**kept and re-verified** when the dive changes rather than cleared — the
+more useful "does my plan still hold up?" behavior. See
+[ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ## Native `<select>` over a custom listbox
 
 A fully custom, theme-matched listbox (`makeListbox`) was built to replace the

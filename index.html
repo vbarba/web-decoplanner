@@ -213,7 +213,11 @@
       <section class="panel reveal" id="panel-table" aria-labelledby="table-title">
         <div class="panel-head">
           <h2 class="panel-title" id="table-title">Runtime table</h2>
-          <button type="button" class="ghost-btn" id="copy-btn" title="Copy plan as text">COPY</button>
+          <span class="verify-verdict" id="verify-verdict" hidden></span>
+          <div class="table-tools">
+            <button type="button" class="ghost-btn" id="edit-deco-btn" title="Edit deco stops and verify safety">EDIT DECO</button>
+            <button type="button" class="ghost-btn" id="copy-btn" title="Copy plan as text">COPY</button>
+          </div>
         </div>
         <table class="runtime-table">
           <thead>

@@ -391,7 +391,8 @@
       gfHigh: num(input.gfHigh, 80),
       gasById: {},
       gasList: [],
-      segments: []
+      segments: [],
+      customStops: null            // verify mode: replay these exact stops
     };
     if (P.descentRate <= 0 || P.ascentRate <= 0) errors.push('descentRate and ascentRate must be > 0');
     if (P.interval <= 0) errors.push('stopInterval must be > 0');
@@ -428,6 +429,21 @@
       if (!(tm > 0)) { errors.push('segment #' + i + ' has invalid time'); continue; }
       if (!s.gasId || !P.gasById[s.gasId]) { errors.push('segment #' + i + ' references unknown gasId "' + (s && s.gasId) + '"'); continue; }
       P.segments.push({ depth: d, time: tm, gasId: s.gasId });
+    }
+
+    // Verify mode: replay an exact deco schedule (deepest first). Off-grid and
+    // out-of-order depths are accepted; only structurally invalid entries error.
+    if (Array.isArray(input.customStops) && input.customStops.length) {
+      const cs = [];
+      for (let i = 0; i < input.customStops.length; i++) {
+        const s = input.customStops[i];
+        const d = num(s && s.depth, NaN), tm = num(s && s.time, NaN);
+        if (!(d >= 0)) { errors.push('custom stop #' + i + ' has invalid depth'); continue; }
+        if (!(tm >= 0)) { errors.push('custom stop #' + i + ' has invalid time'); continue; }
+        if (!s.gasId || !P.gasById[s.gasId]) { errors.push('custom stop #' + i + ' references unknown gasId "' + (s && s.gasId) + '"'); continue; }
+        cs.push({ depth: d, time: tm, gasId: s.gasId });
+      }
+      if (cs.length) P.customStops = cs;
     }
     return { errors: errors, warnings: warnings, P: P };
   }
@@ -755,6 +771,97 @@
     };
   }
 
+  // VERIFY MODE: replay the user's exact stop schedule against the VPM-B
+  // ceiling (no CVA re-optimization, no auto-switching). Each row's gas is
+  // breathed travelling to and held at that depth; the last row's gas carries
+  // the final ascent. `grads` are the start-of-ascent allowable gradients
+  // (initial, un-relaxed). Returns rows/stops/t/runtime plus a `verify` verdict.
+  function replayCustomStopsVPM(P, start, grads, sampler) {
+    const t = cloneT(start.t);
+    let depth = start.depth, runtime = start.runtime, gas = start.gas;
+    const rows = [], stops = [];
+    const cs = P.customStops;
+    const firstStopP = cs.length ? P.pAmb(cs[0].depth) : null;   // Boyle anchor
+    let firstStopArrivalRt = null;
+
+    function ceilNow() {
+      return Math.max(0, ceilingDepthM(P, t, grads, firstStopP, P.boyleOn));
+    }
+    function sampleNow(tm, d) { if (sampler) sampler(tm, d, gas, ceilNow()); }
+
+    function travelTo(target) {
+      const dur = Math.abs(depth - target) / (target < depth ? P.ascentRate : P.descentRate);
+      if (dur <= EPS) { depth = target; return; }
+      const p0 = P.pAmb(depth), p1 = P.pAmb(target), step = 0.5;
+      let done = 0;
+      while (done < dur - EPS) {
+        const dt = Math.min(step, dur - done);
+        const f0 = done / dur, f1 = (done + dt) / dur;
+        applyRamp(t, p0 + (p1 - p0) * f0, p0 + (p1 - p0) * f1, dt, gas);
+        done += dt;
+        sampleNow(runtime + done, depth + (target - depth) * (done / dur));
+      }
+      const row = makeRow(target < depth ? 'asc' : 'desc', depth, target, dur, runtime + dur, gas);
+      row.ppO2Start = gas.fO2 * p0; row.ppO2End = gas.fO2 * p1;
+      rows.push(row);
+      runtime += dur; depth = target;
+    }
+    function holdAt(d, dur, phase) {
+      const pamb = P.pAmb(d), step = 0.5;
+      let done = 0;
+      while (done < dur - EPS) {
+        const dt = Math.min(step, dur - done);
+        applyConst(t, pamb, gas, dt);
+        done += dt;
+        sampleNow(runtime + done, d);
+      }
+      const row = makeRow(phase, d, d, dur, runtime + dur, gas);
+      row.ppO2Start = gas.fO2 * pamb; row.ppO2End = gas.fO2 * pamb;
+      rows.push(row);
+      runtime += dur;
+    }
+
+    let maxExceed = 0, firstDepth = null, firstTime = null;
+    function checkViol(d) {
+      const exceed = ceilNow() - d;
+      if (exceed > maxExceed) maxExceed = exceed;
+      if (firstDepth === null && exceed > 0.5) { firstDepth = d; firstTime = runtime; }
+    }
+
+    sampleNow(runtime, depth);
+    checkViol(depth);
+    for (let i = 0; i < cs.length; i++) {
+      const stop = cs[i];
+      if (stop.gasId !== gas.id) {                  // 0-min switch marker row
+        gas = P.gasById[stop.gasId];
+        const pamb = P.pAmb(depth);
+        const sw = makeRow('switch', depth, depth, 0, runtime, gas);
+        sw.ppO2Start = gas.fO2 * pamb; sw.ppO2End = gas.fO2 * pamb;
+        rows.push(sw);
+        sampleNow(runtime, depth);
+      }
+      travelTo(stop.depth);
+      checkViol(depth);
+      if (firstStopArrivalRt === null) firstStopArrivalRt = runtime;
+      holdAt(stop.depth, Math.max(0, stop.time), 'stop');
+      checkViol(depth);
+      stops.push({ depth: stop.depth, time: stop.time, runtime: runtime, gasId: gas.id });
+    }
+    if (depth > EPS) { travelTo(0); checkViol(depth); }
+
+    return {
+      errors: [], rows: rows, stops: stops, t: t, runtime: runtime,
+      firstActualStop: stops.length ? stops[0].depth : null,
+      firstStopArrivalRt: firstStopArrivalRt,
+      verify: {
+        safe: maxExceed <= 0.5,
+        maxCeilingExceedance: maxExceed,
+        firstViolationDepth: firstDepth,
+        firstViolationTime: firstTime,
+      },
+    };
+  }
+
   // ========================================================================
   // full pipeline (bottom + CVA loop + final ascent)
   // ========================================================================
@@ -791,12 +898,37 @@
     const initial = gradientsFromDive(bottom.cr, Math.max(bottom.runtime, 1e-3), P.rN2, P.rHe);
     let grads = { n2: initial.n2.slice(), he: initial.he.slice() };
 
+    const ascentStart0 = { t: bottom.t, depth: bottom.depth, runtime: bottom.runtime, gas: bottom.gas };
+
+    // ---- VERIFY MODE: replay the user's exact stops, skip the CVA loop ----
+    if (P.customStops) {
+      const rep = replayCustomStopsVPM(P, ascentStart0, initial,
+        collect ? function (tm, d, gas, c) {
+          profile.push({ t: tm, depth: d, gasId: gas.id });
+          ceilingProfile.push({ t: tm, ceiling: c });
+        } : null);
+      out.ok = true;
+      out.P = P;
+      out.rows = bottom.rows.concat(rep.rows);
+      out.stops = rep.stops;
+      out.firstActualStop = rep.firstActualStop;
+      out.firstStopArrivalRt = rep.firstStopArrivalRt;
+      out.totalRuntime = rep.runtime;
+      out.finalT = rep.t;
+      out.deepest = bottom.deepest;
+      out.bottomRuntime = bottom.runtime;
+      out.profile = profile;
+      out.ceilingProfile = ceilingProfile;
+      out.verify = rep.verify;
+      return out;
+    }
+
     // ---- critical volume loop (Baker main CVA loop) ----
     // Baker's convergence test: the schedule is converged when the total
     // phase volume time (deco + surface) changes by <= 1 minute in ANY ONE
     // compartment between two successive iterations; the converged schedule
     // (computed with the last relaxed gradients) is the output.
-    const ascentStart = { t: bottom.t, depth: bottom.depth, runtime: bottom.runtime, gas: bottom.gas };
+    const ascentStart = ascentStart0;
     let sim = null, lastPVT = null, converged = false;
     for (let iter = 0; iter < 35; iter++) {
       sim = simulateAscent(P, ascentStart, grads, {});
@@ -877,7 +1009,7 @@
       },
       table: [], stops: [], noDeco: false, ndl: null, firstStopDepth: null,
       totalRuntime: 0, totalDecoTime: 0, gasUsage: [],
-      oxygen: { cns: 0, otu: 0 }, profile: [], ceilingProfile: [], finalTissues: []
+      oxygen: { cns: 0, otu: 0 }, profile: [], ceilingProfile: [], finalTissues: [], verify: null
     };
   }
 
@@ -887,8 +1019,8 @@
     const P = r.P;
     const warnings = r.warnings;
 
-    // ---- NDL ----
-    const noDeco = r.stops.length === 0;
+    // ---- NDL ----  (verify mode: a chosen schedule, never NDL)
+    const noDeco = r.verify ? false : (r.stops.length === 0);
     let ndl = null;
     if (noDeco) {
       // deepest segment index
@@ -961,6 +1093,11 @@
           segViolT.toFixed(0) + ' min); add decompression before the shallow level');
       }
     }
+    if (r.verify && !r.verify.safe) {
+      warnings.push('custom deco schedule violates the decompression ceiling by ' +
+        r.verify.maxCeilingExceedance.toFixed(1) + ' m (at ' + r.verify.firstViolationDepth.toFixed(0) +
+        ' m, t=' + r.verify.firstViolationTime.toFixed(0) + ' min); add deco time before surfacing');
+    }
 
     const gasUsage = [];
     for (const id in usage) {
@@ -999,7 +1136,8 @@
       oxygen: { cns: cns, otu: otu },
       profile: r.profile,
       ceilingProfile: r.ceilingProfile,
-      finalTissues: finalTissues
+      finalTissues: finalTissues,
+      verify: r.verify || null      // present only in verify mode, else null
     };
   }
 

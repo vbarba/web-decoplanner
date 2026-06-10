@@ -6,6 +6,14 @@
  * (absolute), gas fractions 0..1, volumes in surface-equivalent liters.
  *
  * Exposed as DecoEngine in the browser and via module.exports in Node.
+ *
+ * VERIFY MODE: if input.customStops = [{depth, time, gasId}] (ordered
+ * deepest->shallowest) is present, plan() replays that exact deco schedule
+ * instead of generating one — each row's gas is breathed travelling up to and
+ * held at that depth; the final ascent uses the last row's gas. The result
+ * then carries verify = { safe, maxCeilingExceedance (m above ceiling, 0 if
+ * clear), firstViolationDepth, firstViolationTime } and a warning when unsafe.
+ * verify is null on the normal (generate) path.
  */
 (function (root, factory) {
   const api = factory();
@@ -149,6 +157,7 @@
       gasList: [],
       decoGases: [],
       segments: [],
+      customStops: null,            // verify mode: replay these exact stops
     };
 
     if (!(sp > 0.5 && sp < 1.2)) errors.push('surfacePressure must be in (0.5, 1.2) bar');
@@ -214,6 +223,24 @@
       }
       ctx.segments.push({ depth: depth, gasId: s.gasId, travelTime: travelTime, levelTime: Math.max(0, levelTime) });
       cur = depth;
+    }
+
+    // Verify mode: an explicit deco schedule to replay exactly (deepest first).
+    // Edits are honored literally — off-grid and out-of-order depths are
+    // accepted and replayed (the result's `verify` verdict tells the diver if
+    // the schedule is safe); only structurally invalid entries are rejected.
+    if (Array.isArray(input.customStops) && input.customStops.length) {
+      const cs = [];
+      for (let i = 0; i < input.customStops.length; i++) {
+        const s = input.customStops[i];
+        const depth = Number(s.depth);
+        const time = Number(s.time);
+        if (!isFinite(depth) || depth < 0) { errors.push('custom stop ' + (i + 1) + ' has an invalid depth'); continue; }
+        if (!isFinite(time) || time < 0) { errors.push('custom stop ' + (i + 1) + ' has an invalid time'); continue; }
+        if (!ctx.gases[s.gasId]) { errors.push('custom stop ' + (i + 1) + ' references unknown gas "' + s.gasId + '"'); continue; }
+        cs.push({ depth: depth, time: time, gasId: s.gasId });
+      }
+      if (cs.length) ctx.customStops = cs;
     }
 
     return { ctx: ctx, errors: errors };
@@ -349,6 +376,51 @@
         if (g) switchTo(sim, g.id, ctx.switchHold);
       }
     }
+  }
+
+  // VERIFY MODE: replay the user's exact deco schedule (no auto-switching, no
+  // re-optimization). Each row's gas is breathed travelling UP TO that depth
+  // and held AT it; the final ascent to the surface uses the last row's gas.
+  // Returns the safety verdict computed by scanning the whole profile against
+  // the displayed (GF-adjusted) ceiling.
+  function replayCustomStops(sim) {
+    const ctx = sim.ctx;
+    // Anchor the GF slope at the deepest custom stop so the displayed ceiling
+    // tapers from gfLow there toward gfHigh at the surface, as in generate mode.
+    sim.anchor = ctx.customStops[0].depth;
+    let decoStartRt = null;
+    for (let i = 0; i < ctx.customStops.length; i++) {
+      const cs = ctx.customStops[i];
+      if (cs.gasId !== sim.gasId) switchTo(sim, cs.gasId, 0);  // 0-min switch marker
+      travelTo(sim, cs.depth < sim.depth - EPS ? 'asc' : (cs.depth > sim.depth + EPS ? 'desc' : 'asc'),
+               cs.depth, cs.depth < sim.depth ? ctx.ascentRate : ctx.descentRate);
+      const arrivalRt = sim.runtime;
+      holdAt(sim, 'stop', Math.max(0, cs.time));
+      sim.stops.push({ depth: cs.depth, time: cs.time, runtime: sim.runtime, gasId: sim.gasId });
+      if (decoStartRt === null) decoStartRt = arrivalRt;
+    }
+    // Final ascent to the surface on the last row's gas (no auto-switch).
+    if (sim.depth > EPS) travelTo(sim, 'asc', 0, ctx.ascentRate);
+
+    // Scan the entire profile for the worst ceiling exceedance.
+    let maxExceed = 0, firstDepth = null, firstTime = null;
+    for (let i = 0; i < sim.profile.length; i++) {
+      const exceed = sim.ceilingProfile[i].ceiling - sim.profile[i].depth;
+      if (exceed > maxExceed) maxExceed = exceed;
+      if (firstDepth === null && exceed > 0.5) {
+        firstDepth = sim.profile[i].depth;
+        firstTime = sim.profile[i].t;
+      }
+    }
+    return {
+      decoStartRt: decoStartRt,
+      verify: {
+        safe: maxExceed <= 0.5,
+        maxCeilingExceedance: maxExceed,
+        firstViolationDepth: firstDepth,
+        firstViolationTime: firstTime,
+      },
+    };
   }
 
   // Whole minutes to wait at the current stop until the ceiling (with the
@@ -487,7 +559,7 @@
       ok: false, errors: errors, warnings: warnings, algorithm: 'ZHL16C', params: params,
       table: [], stops: [], noDeco: false, ndl: null, firstStopDepth: null,
       totalRuntime: 0, totalDecoTime: 0, gasUsage: [], oxygen: { cns: 0, otu: 0 },
-      profile: [], ceilingProfile: [], finalTissues: [],
+      profile: [], ceilingProfile: [], finalTissues: [], verify: null,
     };
   }
 
@@ -527,11 +599,16 @@
       if (v > segViol) { segViol = v; segViolT = sim.profile[i].t; }
     }
 
-    // --- Ascent: NDL or staged decompression ---
-    const noDeco = ceilingDepth(sim.pn, sim.ph, ctx.gfHi, ctx) <= EPS;
+    // --- Ascent: verify a user schedule, or generate (NDL / staged deco) ---
+    let noDeco = ctx.customStops ? false : ceilingDepth(sim.pn, sim.ph, ctx.gfHi, ctx) <= EPS;
     let ndl = null;
     let decoStartRt = null;   // runtime on arrival at the first actual stop
-    if (noDeco) {
+    let verify = null;
+    if (ctx.customStops) {
+      const rep = replayCustomStops(sim);
+      decoStartRt = rep.decoStartRt;
+      verify = rep.verify;
+    } else if (noDeco) {
       ndl = computeNdl(sim);
       ascendWithSwitches(sim, 0);
     } else {
@@ -601,6 +678,11 @@
       warnings.push('planned level rises ' + segViol.toFixed(1) + ' m above the decompression ceiling (t=' +
         segViolT.toFixed(0) + ' min); add decompression before the shallow level');
     }
+    if (verify && !verify.safe) {
+      warnings.push('custom deco schedule violates the decompression ceiling by ' +
+        verify.maxCeilingExceedance.toFixed(1) + ' m (at ' + verify.firstViolationDepth.toFixed(0) +
+        ' m, t=' + verify.firstViolationTime.toFixed(0) + ' min); add deco time before surfacing');
+    }
 
     // --- Final tissue state ---
     const finalTissues = [];
@@ -635,6 +717,7 @@
       profile: sim.profile,
       ceilingProfile: sim.ceilingProfile,
       finalTissues: finalTissues,
+      verify: verify,            // present only in verify mode, else null
     };
   }
 
