@@ -18,7 +18,7 @@ calls. It implements two decompression models side by side:
 
 - **Bühlmann ZHL-16C with gradient factors** (GF low/high, 5–100)
 - **VPM-B** (Varying Permeability Model with Boyle compensation and critical
-  volume algorithm) with conservatism levels **0 to +4**
+  volume algorithm) with conservatism levels **+0 to +5**
 
 ## Features
 
@@ -70,6 +70,11 @@ node js/ui/charts.js         # charts self-check (silent on success, exit 0)
 ```
 
 ## Architecture
+
+> Deeper docs live in [`docs/`](./docs): [ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+> (module map, engine contract, internals), [DESIGN.md](./docs/DESIGN.md)
+> (UI/UX direction and tokens), and [DECISIONS.md](./docs/DECISIONS.md)
+> (why notable choices were made).
 
 | File | Global | Role |
 | --- | --- | --- |
