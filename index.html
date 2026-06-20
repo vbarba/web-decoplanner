@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#04070d">
-  <meta name="description" content="HALDANE — technical dive decompression planner. ZHL-16C+GF and VPM-B.">
+  <meta name="description" content="HALDANE — technical dive decompression planner. Bühlmann ZHL-16C/ZHL-16B + GF and VPM-B.">
   <title>HALDANE — Decompression Planner</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2304070d'/%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%2335e0c2' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%2335e0c2'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -77,15 +77,17 @@
       <section class="panel" aria-labelledby="algo-title">
         <h2 class="panel-title" id="algo-title">Algorithm</h2>
         <div class="seg-control algo-toggle" role="group" aria-label="Decompression model">
-          <button type="button" id="algo-zhl" data-algo="ZHL16C" class="active" aria-pressed="true">ZHL-16C&thinsp;+&thinsp;GF</button>
+          <button type="button" id="algo-zhl" data-algo="ZHL16C" class="active" aria-pressed="true">B&Uuml;HLMANN&thinsp;+&thinsp;GF</button>
           <button type="button" id="algo-vpm" data-algo="VPMB" aria-pressed="false">VPM-B</button>
         </div>
 
         <div id="zhl-controls" class="algo-body">
-          <span class="field-label" id="zhl-variant-label">COEFFICIENTS</span>
-          <div class="seg-control mini zhl-variant-toggle" id="zhl-variant" role="group" aria-labelledby="zhl-variant-label">
-            <button type="button" id="zhl-c" data-zhlvariant="ZHL16C" class="active" aria-pressed="true">ZHL-16C</button>
-            <button type="button" id="zhl-b" data-zhlvariant="ZHL16B" aria-pressed="false">ZHL-16B</button>
+          <div class="zhl-variant-group">
+            <span class="field-label" id="zhl-variant-label">COEFFICIENTS</span>
+            <div class="seg-control mini zhl-variant-toggle" id="zhl-variant" role="group" aria-labelledby="zhl-variant-label">
+              <button type="button" id="zhl-c" data-zhlvariant="ZHL16C" class="active" aria-pressed="true">ZHL-16C</button>
+              <button type="button" id="zhl-b" data-zhlvariant="ZHL16B" aria-pressed="false">ZHL-16B</button>
+            </div>
           </div>
           <div class="gf-row">
             <label for="gf-low-num">GF&nbsp;LOW</label>
