@@ -81,7 +81,7 @@
     return {
       units: 'metric',
       algorithm: 'ZHL16C',
-      gfLow: 50, gfHigh: 80,
+      gfLow: 20, gfHigh: 85,
       vpmConservatism: 2,
       surfacePressure: 1.013,
       water: 'salt',
