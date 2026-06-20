@@ -375,7 +375,7 @@
       ascentRate: num(input.ascentRate, 9),
       interval: num(input.stopInterval, 3),
       lastStop: num(input.lastStopDepth, 6),
-      minStop: Math.max(1, Math.round(num(input.minStopTime, 1))),
+      minStop: Math.max(1, Math.ceil(num(input.minStopTime, 1) - 1e-9)),
       gasSwitchStopTime: num(input.gasSwitchStopTime, 1),
       ppO2MaxDeco: num(input.ppO2MaxDeco, 1.61),
       includeTravel: input.segmentTimesIncludeTravel !== false,
@@ -424,8 +424,10 @@
     for (let i = 0; i < segs.length; i++) {
       const s = segs[i];
       const d = num(s && s.depth, NaN), tm = num(s && s.time, NaN);
-      if (!(d > 0)) { errors.push('segment #' + i + ' has invalid depth'); continue; }
-      if (!(tm > 0)) { errors.push('segment #' + i + ' has invalid time'); continue; }
+      // Parity with the ZHL engine: a 0 m (surface) segment and 0-min time are
+      // accepted; only negative / non-finite values are rejected.
+      if (!(d >= 0)) { errors.push('segment #' + i + ' has invalid depth'); continue; }
+      if (!(tm >= 0)) { errors.push('segment #' + i + ' has invalid time'); continue; }
       if (!s.gasId || !P.gasById[s.gasId]) { errors.push('segment #' + i + ' references unknown gasId "' + (s && s.gasId) + '"'); continue; }
       P.segments.push({ depth: d, time: tm, gasId: s.gasId });
     }
@@ -544,10 +546,13 @@
     return 0;
   }
 
+  // First-stop depth on the stop ladder. Parity with the ZHL engine: round the
+  // ceiling UP to an absolute multiple of stopInterval (3, 6, 9 …), then clamp
+  // to lastStop. (When lastStop is itself a multiple of the interval — 3 or 6,
+  // the only UI choices — this equals the older lastStop+n·interval grid.)
   function ladderUp(P, ceilM) {
     if (ceilM <= P.lastStop + 1e-6) return P.lastStop;
-    const n = Math.ceil((ceilM - P.lastStop) / P.interval - 1e-9);
-    return P.lastStop + n * P.interval;
+    return Math.max(Math.ceil(ceilM / P.interval - 1e-9) * P.interval, P.lastStop);
   }
 
   function bestGasAt(P, depth, current) {

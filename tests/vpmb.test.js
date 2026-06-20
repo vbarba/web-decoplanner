@@ -399,5 +399,27 @@ const ref = VPMB.plan(baseInput());
 })();
 
 // ---------------------------------------------------------------------------
+// Cross-engine contract parity (ZHL-16 vs VPM-B): conventions that must match.
+// ---------------------------------------------------------------------------
+(function () {
+  const ZHL = require(path.join(__dirname, '..', 'js', 'engine', 'zhl16.js'));
+  function pair(extra) {
+    const z = ZHL.plan(Object.assign(baseInput({ algorithm: 'ZHL16C' }), extra));
+    const v = VPMB.plan(Object.assign(baseInput({ algorithm: 'VPMB' }), extra));
+    return { z: z, v: v };
+  }
+  // depth=0 (surface) segment: accepted by BOTH engines (was VPM-only reject).
+  const p0 = pair({ segments: [{ depth: 0, time: 5, gasId: 'tx2135' }] });
+  check('parity: depth=0 segment accepted by both engines', p0.z.ok === p0.v.ok,
+    'ZHL ok=' + p0.z.ok + ' VPM ok=' + p0.v.ok);
+  // fractional minStopTime: BOTH ceil it (was VPM round vs ZHL ceil).
+  const pm = pair({ minStopTime: 1.4, segments: [{ depth: 45, time: 25, gasId: 'tx2135' }] });
+  function minStop(r) { return r.stops.length ? Math.min.apply(null, r.stops.map(function (s) { return s.time; })) : null; }
+  check('parity: minStopTime=1.4 yields the same minimum stop in both engines',
+    minStop(pm.z) === minStop(pm.v) && minStop(pm.z) === 2,
+    'ZHL=' + minStop(pm.z) + ' VPM=' + minStop(pm.v));
+})();
+
+// ---------------------------------------------------------------------------
 console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);
