@@ -100,13 +100,9 @@
 
       // Runtime table tools
       'btn.travel': 'TRAVEL',
-      'btn.fixDeco': 'FIX DECO',
-      'btn.editDeco': 'EDIT DECO',
       'btn.copy': 'COPY',
       'col.ppo2': 'ppO₂',
       'tip.travel': 'Show ascent/descent travel legs in the table',
-      'tip.fixDeco': 'Add the deco stops needed to clear the ceiling',
-      'tip.editDeco': 'Edit deco stops and verify safety',
       'tip.copy': 'Copy plan as text',
 
       // Metrics tiles
@@ -194,13 +190,9 @@
       'btn.import': 'IMPORTAR',
 
       'btn.travel': 'TRÁNSITO',
-      'btn.fixDeco': 'CORREGIR DECO',
-      'btn.editDeco': 'EDITAR DECO',
       'btn.copy': 'COPIAR',
       'col.ppo2': 'ppO₂',
       'tip.travel': 'Mostrar los tramos de ascenso/descenso en la tabla',
-      'tip.fixDeco': 'Añadir las paradas de deco necesarias para respetar el techo',
-      'tip.editDeco': 'Editar las paradas de deco y verificar la seguridad',
       'tip.copy': 'Copiar el plan como texto',
 
       'tile.runtime': 'T. TOTAL',
@@ -286,13 +278,9 @@
       'btn.import': 'IMPORTER',
 
       'btn.travel': 'TRAJET',
-      'btn.fixDeco': 'CORRIGER DÉCO',
-      'btn.editDeco': 'ÉDITER DÉCO',
       'btn.copy': 'COPIER',
       'col.ppo2': 'ppO₂',
       'tip.travel': 'Afficher les phases de descente/remontée dans la table',
-      'tip.fixDeco': 'Ajouter les paliers de déco nécessaires pour respecter le plafond',
-      'tip.editDeco': 'Éditer les paliers de déco et vérifier la sécurité',
       'tip.copy': 'Copier le plan en texte',
 
       'tile.runtime': 'TEMPS TOT.',
@@ -378,13 +366,9 @@
       'btn.import': 'IMPORT',
 
       'btn.travel': 'WEGZEIT',
-      'btn.fixDeco': 'DEKO KORR.',
-      'btn.editDeco': 'DEKO BEARB.',
       'btn.copy': 'KOPIEREN',
       'col.ppo2': 'ppO₂',
       'tip.travel': 'Ab-/Aufstiegsphasen in der Tabelle anzeigen',
-      'tip.fixDeco': 'Die nötigen Dekostopps hinzufügen, um die Decke einzuhalten',
-      'tip.editDeco': 'Dekostopps bearbeiten und Sicherheit prüfen',
       'tip.copy': 'Plan als Text kopieren',
 
       'tile.runtime': 'LAUFZEIT',
@@ -470,13 +454,9 @@
       'btn.import': '导入',
 
       'btn.travel': '行程',
-      'btn.fixDeco': '修复减压',
-      'btn.editDeco': '编辑减压',
       'btn.copy': '复制',
       'col.ppo2': 'ppO₂',
       'tip.travel': '在表中显示上升/下降行程段',
-      'tip.fixDeco': '添加清除天花板所需的减压停留',
-      'tip.editDeco': '编辑减压停留并验证安全性',
       'tip.copy': '将计划复制为文本',
 
       'tile.runtime': '总时间',

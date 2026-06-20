@@ -16,7 +16,7 @@
   var DIVES_KEY = 'haldane-dives-v1';
   // Settings captured in a saved-dive snapshot — everything in defaults() except
   // units (a display preference, not part of the dive) and the profile arrays
-  // (segments/gases/customStops, stored alongside as their own fields).
+  // (segments/gases, stored alongside as their own fields).
   var SETTINGS_FIELDS = ['algorithm', 'gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure',
     'water', 'descentRate', 'ascentRate', 'lastStopDepth', 'ppO2MaxDeco',
     'segmentTimesIncludeTravel', 'sacBottom', 'sacDeco', 'gasReserve', 'extraReserveBar', 'showTravel'];
@@ -102,7 +102,6 @@
       sacDeco: 16,
       gasReserve: 'mingas',
       extraReserveBar: 0,    // fixed reserve added on top of every rule (bar)
-      customStops: null,     // verify mode: [{depth,time,gasId}] or null (computed)
       showTravel: false,     // view-only: show ascent/descent travel legs in the table
       segments: [{ depth: 45, time: 30, gasId: 'tx2135' }],
       gases: [
@@ -265,14 +264,6 @@
       if (gs.length) d.gases = gs;
     }
     if (!RESERVE_RULES[d.gasReserve]) d.gasReserve = 'thirds';
-    if (Array.isArray(s.customStops)) {
-      var cstops = s.customStops.filter(function (cs) {
-        return cs && typeof cs.depth === 'number' && typeof cs.time === 'number' && typeof cs.gasId === 'string';
-      });
-      d.customStops = cstops.length ? cstops : null;
-    } else {
-      d.customStops = null;
-    }
     if (Array.isArray(s.segments) && s.segments.length) {
       var segs = s.segments.filter(function (sg) {
         return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
@@ -333,10 +324,7 @@
       segments: state.segments.map(function (s) { return { depth: s.depth, time: s.time, gasId: s.gasId }; }),
       gases: state.gases.map(function (g) {
         return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type, cyl: g.cyl, startBar: g.startBar };
-      }),
-      customStops: (state.customStops && state.customStops.length)
-        ? state.customStops.map(function (s) { return { depth: s.depth, time: s.time, gasId: s.gasId }; })
-        : null
+      })
     };
   }
 
@@ -372,14 +360,6 @@
                typeof sg.gasId === 'string';
       });
       if (segs.length) d.segments = segs;
-    }
-    if (Array.isArray(dive.customStops)) {
-      var cstops = dive.customStops.filter(function (cs) {
-        return cs && typeof cs.depth === 'number' && typeof cs.time === 'number' && typeof cs.gasId === 'string';
-      });
-      d.customStops = cstops.length ? cstops : null;
-    } else {
-      d.customStops = null;
     }
     coerceState(d);
     if (!hasVPM && d.algorithm === 'VPMB') d.algorithm = 'ZHL16C';
@@ -483,12 +463,7 @@
         return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type };
       }),
       sacBottom: state.sacBottom,
-      sacDeco: state.sacDeco,
-      // Verify mode: when a custom deco schedule exists, the engine replays it
-      // exactly instead of generating one. Omitted (undefined) otherwise.
-      customStops: (state.customStops && state.customStops.length)
-        ? state.customStops.map(function (s) { return { depth: s.depth, time: s.time, gasId: s.gasId }; })
-        : undefined
+      sacDeco: state.sacDeco
     };
   }
 
@@ -703,31 +678,12 @@
     if (!(state.sacDeco >= 1 && state.sacDeco <= 100)) bad('sacDeco', 'Deco SAC out of range');
     if (!(state.extraReserveBar >= 0 && state.extraReserveBar <= 300)) bad('extraReserveBar', 'Extra reserve must be 0–300 bar');
 
-    // Custom deco stops (verify mode). Off-grid and out-of-order depths are
-    // accepted by the engine (verify-exact) — flag them inline as advisories
-    // (mark .invalid) WITHOUT blocking the replan. Only a missing gas hard-blocks.
-    if (state.customStops && state.customStops.length) {
-      var deepestSeg = 0;
-      state.segments.forEach(function (s) { if (s.depth > deepestSeg) deepestSeg = s.depth; });
-      var prevDepth = Infinity;
-      state.customStops.forEach(function (cs, i) {
-        var advisory = false;
-        if (!(cs.depth > 0 && cs.depth <= deepestSeg + 1e-6)) advisory = true;       // range
-        if (cs.depth > prevDepth + 1e-6) advisory = true;                            // out of order
-        if (Math.abs(cs.depth / STOP_INTERVAL - Math.round(cs.depth / STOP_INTERVAL)) > 1e-3) advisory = true; // off-grid
-        if (advisory) fields['cs-' + i + '-depth'] = true;
-        if (!(cs.time >= 0 && cs.time <= 999)) fields['cs-' + i + '-time'] = true;
-        if (!gasById(cs.gasId)) bad('cs-' + i + '-gas', 'Custom stop ' + (i + 1) + ': gas no longer exists');
-        prevDepth = cs.depth;
-      });
-    }
-
     return { errors: errors, fields: fields };
   }
 
   function applyValidation() {
     var v = validate();
-    var nodes = document.querySelectorAll('.rail [data-vkey], #runtime-body [data-vkey]');
+    var nodes = document.querySelectorAll('.rail [data-vkey]');
     for (var i = 0; i < nodes.length; i++) {
       var k = nodes[i].getAttribute('data-vkey');
       nodes[i].classList.toggle('invalid', !!v.fields[k]);
@@ -1262,9 +1218,6 @@
     renderGasUsage(result);
     renderWarnings(result, gasSupplyWarnings(result));
     renderCharts(result);
-    // The editable runtime table builds [data-vkey] inputs only now, so paint
-    // their validation state after the table exists.
-    if (state.customStops && state.customStops.length) applyValidation();
     if (animate) revealPanels();
   }
 
@@ -1320,90 +1273,6 @@
     return depthOut(r.endDepth);
   }
 
-  // Seed editable custom stops from a computed result: one row per held depth,
-  // ordered deepest->shallowest. A gas SWITCH establishes the gas for its depth
-  // (and any shallower depths until the next switch); a STOP contributes hold
-  // time. This faithfully reproduces the computed schedule when replayed, and —
-  // crucially — keeps the gas attached to the depth where the switch happens
-  // (e.g. EAN50 from its 21 m switch), not to the next stop down.
-  function seedCustomStopsFromResult(result) {
-    var byDepth = [];
-    function rowFor(depth, gasId) {
-      for (var k = 0; k < byDepth.length; k++) {
-        if (Math.abs(byDepth[k].depth - depth) < 1e-6) return byDepth[k];
-      }
-      var e = { depth: depth, time: 0, gasId: gasId };
-      byDepth.push(e);
-      return e;
-    }
-    (result.table || []).forEach(function (x) {
-      if (x.phase === 'switch') {
-        // The switch row's gasId is the NEW gas; pin it to the switch depth and
-        // keep its hold time (the 1-min gas-switch stop) so the seeded schedule
-        // reproduces the computed runtime exactly.
-        var sw = rowFor(x.startDepth, x.gasId);
-        sw.gasId = x.gasId;
-        sw.time += Math.round(x.duration);
-      } else if (x.phase === 'stop') {
-        var e = rowFor(x.startDepth, x.gasId);
-        e.time += Math.round(x.duration);
-        // Only adopt the stop's gas if no switch already set one at this depth —
-        // a stop is breathed on whatever gas the switch (if any) selected.
-        if (!e.gasId) e.gasId = x.gasId;
-      }
-    });
-    // Deepest first (engine + UI convention).
-    byDepth.sort(function (a, b) { return b.depth - a.depth; });
-    return byDepth;
-  }
-
-  // Compute the engine's own safe deco schedule (generate mode) as editable
-  // stops, independent of the current customStops. Returns [] if no engine.
-  function computeSafeStops() {
-    var input = buildInput();
-    input.customStops = undefined;
-    var safe = null;
-    if (hasEngine && input.algorithm !== 'VPMB') {
-      try { safe = window.DecoEngine.plan(input); } catch (e) { safe = null; }
-    } else if (hasVPM && input.algorithm === 'VPMB') {
-      try { safe = window.VPMB.plan(input); } catch (e) { safe = null; }
-    }
-    if (!safe || !safe.ok) return [];
-    return seedCustomStopsFromResult(safe);
-  }
-
-  // Auto-fix an insufficient edited schedule: merge the engine's safe stops
-  // into the user's edits — add any missing stop depths and extend stops that
-  // are too short — without shortening anything the user deliberately lengthened.
-  // Returns a summary {added:[], extended:[]} of what changed (metric depths/min).
-  function fixDeco() {
-    var safe = computeSafeStops();
-    if (!safe.length) return null;
-    var cur = (state.customStops || []).map(function (cs) {
-      return { depth: cs.depth, time: cs.time, gasId: cs.gasId };
-    });
-    var added = [], extended = [];
-    safe.forEach(function (s) {
-      var match = null;
-      for (var i = 0; i < cur.length; i++) {
-        if (Math.abs(cur[i].depth - s.depth) < 1e-6) { match = cur[i]; break; }
-      }
-      if (!match) {
-        cur.push({ depth: s.depth, time: s.time, gasId: s.gasId });
-        added.push({ depth: s.depth, time: s.time });
-      } else if (s.time > match.time + 1e-6) {
-        extended.push({ depth: s.depth, from: match.time, to: s.time });
-        match.time = s.time;
-        if (!match.gasId) match.gasId = s.gasId;
-      }
-    });
-    cur.sort(function (a, b) { return b.depth - a.depth; });
-    state.customStops = cur;
-    saveState();
-    runPlan(false);
-    return { added: added, extended: extended };
-  }
-
   function readOnlyRow(r, meta, idx) {
     var tr = mk('tr', 'row-' + r.phase);
     tr.style.setProperty('--i', Math.min(idx, 26));
@@ -1424,16 +1293,9 @@
     return tr;
   }
 
+  // The runtime table is always the engine's freshly-computed schedule; it
+  // regenerates on every settings change (read-only rows).
   function renderTable(result, animate) {
-    if (state.customStops && state.customStops.length) {
-      renderTableEdit(result, animate);
-    } else {
-      renderTableComputed(result, animate);
-    }
-    renderEditDecoControls(result);
-  }
-
-  function renderTableComputed(result, animate) {
     var body = $('runtime-body');
     var meta = resultGasMeta(result);
     clear(body);
@@ -1446,189 +1308,6 @@
       body.appendChild(readOnlyRow(r, meta, i));
     });
     if (animate && !reduceMotion) body.classList.add('cascade');
-  }
-
-  // Edit mode: bottom-phase rows read-only, the deco stops as editable rows
-  // driven by state.customStops (depth/time inputs + gas select), with RUN/ppO2
-  // shown from the replayed result by matching stop index.
-  function renderTableEdit(result, animate) {
-    var body = $('runtime-body');
-    var meta = resultGasMeta(result);
-    clear(body);
-    body.classList.remove('cascade');
-
-    // Read-only rows up to (but not including) the first stop/switch.
-    var table = result.table || [];
-    var firstHeld = -1;
-    for (var i = 0; i < table.length; i++) {
-      if (table[i].phase === 'stop' || table[i].phase === 'switch') { firstHeld = i; break; }
-    }
-    var head = firstHeld < 0 ? table.slice() : table.slice(0, firstHeld);
-    if (!state.showTravel) {
-      head = head.filter(function (r) { return r.phase !== 'asc' && r.phase !== 'desc'; });
-    }
-    head.forEach(function (r, idx) {
-      // skip ascent legs that land on the first custom stop (they are implied)
-      body.appendChild(readOnlyRow(r, meta, idx));
-    });
-
-    // Match each custom stop to the replayed result stop (by order) for RUN/ppO2.
-    var resStops = (result.stops || []);
-    // Flag the stop responsible for a violation: the shallowest stop that is
-    // still at or below the first violation depth (the one that should have
-    // been longer). Violations usually occur on ascent above the last stop.
-    var violIdx = -1;
-    if (result.verify && !result.verify.safe) {
-      var vd = result.verify.firstViolationDepth;
-      var best = -1;
-      state.customStops.forEach(function (cs, i) {
-        if (cs.depth >= vd - 1e-6) best = i;   // deepest..shallowest; keep the last (shallowest) >= vd
-      });
-      violIdx = best >= 0 ? best : (state.customStops.length - 1);  // else the shallowest stop
-    }
-
-    state.customStops.forEach(function (cs, i) {
-      var tr = mk('tr', 'row-stop row-custom');
-      var matched = resStops[i] || null;
-      var isViol = (i === violIdx);
-      if (isViol) tr.classList.add('row-violation');
-
-      // DEPTH (editable) + warning glyph when this row violates the ceiling
-      var tdD = mk('td', 'cs-depth');
-      if (isViol) {
-        var wg = mk('span', 'phase-glyph warn', '⚠');
-        wg.setAttribute('aria-hidden', 'true');
-        wg.title = 'ceiling violation';
-        tdD.appendChild(wg);
-      }
-      var inD = mk('input');
-      inD.type = 'number'; inD.min = '0'; inD.step = '1'; inD.inputMode = 'decimal';
-      inD.value = depthOut(cs.depth);
-      inD.setAttribute('data-cs', i); inD.setAttribute('data-field', 'depth');
-      inD.setAttribute('data-vkey', 'cs-' + i + '-depth');
-      inD.setAttribute('aria-label', 'Stop ' + (i + 1) + ' depth (' + depthUnit() + ')');
-      tdD.appendChild(inD);
-      tdD.appendChild(mk('span', 'cs-unit', depthUnit()));
-      tr.appendChild(tdD);
-
-      // TIME (editable)
-      var tdT = mk('td', 'cs-time');
-      var inT = mk('input');
-      inT.type = 'number'; inT.min = '0'; inT.max = '999'; inT.step = '1'; inT.inputMode = 'numeric';
-      inT.value = fmt(cs.time, 0);
-      inT.setAttribute('data-cs', i); inT.setAttribute('data-field', 'time');
-      inT.setAttribute('data-vkey', 'cs-' + i + '-time');
-      inT.setAttribute('aria-label', 'Stop ' + (i + 1) + ' minutes');
-      tdT.appendChild(inT);
-      tr.appendChild(tdT);
-
-      // RUN (read-only, from replayed result)
-      tr.appendChild(mk('td', null, matched ? fmt(matched.runtime, 1) : '—'));
-
-      // GAS (editable native select)
-      var tdG = mk('td');
-      var sel = mk('select', 'cs-gas');
-      sel.setAttribute('data-cs', i); sel.setAttribute('data-field', 'gasId');
-      sel.setAttribute('data-vkey', 'cs-' + i + '-gas');
-      sel.setAttribute('aria-label', 'Stop ' + (i + 1) + ' gas');
-      state.gases.forEach(function (g) { sel.appendChild(gasOption(g, cs.gasId)); });
-      tdG.appendChild(sel);
-      var rm = mk('button', 'icon-btn cs-remove', '✕');
-      rm.type = 'button';
-      rm.setAttribute('data-remove-cs', i);
-      rm.setAttribute('aria-label', 'Remove stop ' + (i + 1));
-      rm.title = 'Remove stop';
-      tdG.appendChild(rm);
-      tr.appendChild(tdG);
-
-      // ppO2 (read-only, from the replayed stop row)
-      var ppRow = (result.table || []).filter(function (x) {
-        return x.phase === 'stop' && Math.abs(x.startDepth - cs.depth) < 1e-6;
-      })[0];
-      tr.appendChild(mk('td', null, ppRow ? fmt(ppRow.ppO2End, 2) : '—'));
-
-      body.appendChild(tr);
-    });
-
-    // Footer: + ADD STOP
-    var footTr = mk('tr', 'row-custom-foot');
-    var footTd = mk('td');
-    footTd.setAttribute('colspan', '5');
-    var addBtn = mk('button', 'ghost-btn cs-add', '+ ADD STOP');
-    addBtn.type = 'button';
-    addBtn.id = 'add-stop-btn';
-    footTd.appendChild(addBtn);
-    footTr.appendChild(footTd);
-    body.appendChild(footTr);
-
-    if (animate && !reduceMotion) body.classList.add('cascade');
-  }
-
-  // EDIT DECO / RESET TO COMPUTED + verdict chip in the table panel head.
-  function renderEditDecoControls(result) {
-    var editBtn = $('edit-deco-btn');
-    var verdict = $('verify-verdict');
-    var editing = !!(state.customStops && state.customStops.length);
-
-    if (editBtn) {
-      if (editing) {
-        editBtn.textContent = 'RESET TO COMPUTED';
-        editBtn.disabled = false;
-      } else {
-        editBtn.textContent = 'EDIT DECO';
-        // enabled only when there is a computed deco schedule to edit
-        editBtn.disabled = !(result && result.stops && result.stops.length);
-      }
-    }
-
-    if (verdict) {
-      if (editing && result && result.verify) {
-        verdict.hidden = false;
-        verdict.classList.toggle('ok', result.verify.safe);
-        verdict.classList.toggle('bad', !result.verify.safe);
-        clear(verdict);
-        var gl = mk('span', 'vv-glyph', result.verify.safe ? '✓' : '✕');
-        gl.setAttribute('aria-hidden', 'true');
-        verdict.appendChild(gl);
-        verdict.appendChild(mk('span', null, result.verify.safe
-          ? 'CLEARS CEILING'
-          : 'CEILING −' + fmt(result.verify.maxCeilingExceedance, 1) + ' ' + depthUnit() +
-            ' @ ' + depthOut(result.verify.firstViolationDepth) + ' ' + depthUnit()));
-      } else {
-        verdict.hidden = true;
-      }
-    }
-
-    // FIX DECO action: offered only while editing an unsafe schedule.
-    var fixBtn = $('fix-deco-btn');
-    var unsafe = editing && result && result.verify && !result.verify.safe;
-    if (fixBtn) fixBtn.hidden = !unsafe;
-    // The "what changed" note is only meaningful in edit mode; hide it when we
-    // leave edit mode entirely (the user reset to computed).
-    var note = $('fix-note');
-    if (note && !editing) note.hidden = true;
-  }
-
-  // Render the "what FIX DECO changed" note (added stops / extended times).
-  function showFixNote(summary) {
-    var note = $('fix-note');
-    if (!note) return;
-    if (!summary || (!summary.added.length && !summary.extended.length)) {
-      note.hidden = true;
-      return;
-    }
-    var parts = [];
-    summary.added.forEach(function (a) {
-      parts.push('added ' + fmt(a.time, 0) + ' min @ ' + depthOut(a.depth) + ' ' + depthUnit());
-    });
-    summary.extended.forEach(function (e) {
-      parts.push('extended ' + depthOut(e.depth) + ' ' + depthUnit() +
-        ' to ' + fmt(e.to, 0) + ' min');
-    });
-    clear(note);
-    note.appendChild(mk('span', 'fix-note-glyph', '⚙'));
-    note.appendChild(mk('span', null, 'Auto-fixed: ' + parts.join(' · ') + '.'));
-    note.hidden = false;
   }
 
   /* Cross-gas context for the supply rules: the rock-bottom volume and which
@@ -2014,78 +1693,12 @@
       onStateChanged();
     });
 
-    // --- editable runtime table (verify mode) ---
-    // EDIT DECO seeds custom stops from the computed plan; once editing, the
-    // same button becomes RESET TO COMPUTED.
-    $('edit-deco-btn').addEventListener('click', function () {
-      if (state.customStops && state.customStops.length) {
-        state.customStops = null;            // RESET TO COMPUTED
-        saveState();
-        runPlan(false);
-      } else if (lastGoodResult && lastGoodResult.stops && lastGoodResult.stops.length) {
-        state.customStops = seedCustomStopsFromResult(lastGoodResult);
-        saveState();
-        runPlan(false);                       // re-render in edit mode (verify)
-      }
-    });
-
-    // FIX DECO: auto-add / extend stops so the edited schedule clears the ceiling.
-    $('fix-deco-btn').addEventListener('click', function () {
-      var summary = fixDeco();
-      showFixNote(summary);
-    });
-
     // TRAVEL toggles ascent/descent legs in the table (view-only, no recompute).
     $('travel-btn').addEventListener('click', function () {
       state.showTravel = !state.showTravel;
       syncTravelBtn();
       saveState();
       if (lastGoodResult) renderTable(lastGoodResult, false);
-    });
-
-    // cell edits (depth/time/gas) — verify-replay on the existing debounce
-    $('runtime-body').addEventListener('input', function (ev) {
-      var t = ev.target;
-      if (t.getAttribute('data-cs') === null) return;
-      var i = parseInt(t.getAttribute('data-cs'), 10);
-      var cs = state.customStops && state.customStops[i];
-      if (!cs) return;
-      var f = t.getAttribute('data-field');
-      if (f === 'depth') cs.depth = depthIn(t.value);
-      else if (f === 'time') cs.time = num(t.value);
-      else if (f === 'gasId') cs.gasId = t.value;
-      onStateChanged();
-    });
-    $('runtime-body').addEventListener('change', function (ev) {
-      var t = ev.target;
-      if (t.tagName === 'SELECT' && t.getAttribute('data-cs') !== null) {
-        var i = parseInt(t.getAttribute('data-cs'), 10);
-        if (state.customStops && state.customStops[i]) {
-          state.customStops[i].gasId = t.value;
-          onStateChanged();
-        }
-      }
-    });
-    $('runtime-body').addEventListener('click', function (ev) {
-      var rm = ev.target.closest ? ev.target.closest('[data-remove-cs]') : null;
-      if (rm) {
-        var i = parseInt(rm.getAttribute('data-remove-cs'), 10);
-        state.customStops.splice(i, 1);
-        if (!state.customStops.length) state.customStops = null;  // back to computed
-        saveState();
-        runPlan(false);
-        return;
-      }
-      if (ev.target.id === 'add-stop-btn') {
-        var arr = state.customStops || [];
-        var last = arr[arr.length - 1];
-        var newDepth = last ? Math.max(state.lastStopDepth, last.depth - STOP_INTERVAL) : state.lastStopDepth;
-        var gasId = last ? last.gasId : (state.gases[0] ? state.gases[0].id : '');
-        arr.push({ depth: newDepth, time: 1, gasId: gasId });
-        state.customStops = arr;
-        saveState();
-        runPlan(false);
-      }
     });
 
     // --- gases (delegated)
