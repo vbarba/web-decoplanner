@@ -86,19 +86,19 @@
 
         <div id="zhl-controls" class="algo-body">
           <div class="zhl-variant-group">
-            <span class="field-label" id="zhl-variant-label" data-i18n="field.coefficients">COEFFICIENTS</span>
+            <span class="field-label" id="zhl-variant-label" data-i18n="field.coefficients" data-i18n-title="tipf.coefficients" title="ZHL-16 coefficient set. ZHL-16C is the modern default; ZHL-16B is slightly more conservative in the mid/slow tissues. Hidden under VPM-B.">COEFFICIENTS</span>
             <div class="seg-control mini zhl-variant-toggle" id="zhl-variant" role="group" aria-labelledby="zhl-variant-label">
               <button type="button" id="zhl-c" data-zhlvariant="ZHL16C" aria-pressed="false">ZHL-16C</button>
               <button type="button" id="zhl-b" data-zhlvariant="ZHL16B" class="active" aria-pressed="true">ZHL-16B</button>
             </div>
           </div>
           <div class="gf-row">
-            <label for="gf-low-num" data-i18n="field.gfLow">GF&nbsp;LOW</label>
+            <label for="gf-low-num" data-i18n="field.gfLow" data-i18n-title="tipf.gfLow" title="Gradient factor at the first (deepest) stop. Lower = deeper, longer first stop (more conservative deep).">GF&nbsp;LOW</label>
             <input type="number" id="gf-low-num" class="num-input" data-vkey="gfLow" min="5" max="100" step="1" inputmode="numeric">
             <input type="range" id="gf-low-range" min="5" max="100" step="1" aria-label="Gradient factor low">
           </div>
           <div class="gf-row">
-            <label for="gf-high-num" data-i18n="field.gfHigh">GF&nbsp;HIGH</label>
+            <label for="gf-high-num" data-i18n="field.gfHigh" data-i18n-title="tipf.gfHigh" title="Gradient factor at the surface. Lower = longer shallow stops / more conservative on surfacing.">GF&nbsp;HIGH</label>
             <input type="number" id="gf-high-num" class="num-input" data-vkey="gfHigh" min="5" max="100" step="1" inputmode="numeric">
             <input type="range" id="gf-high-range" min="5" max="100" step="1" aria-label="Gradient factor high">
           </div>
@@ -106,7 +106,7 @@
 
         <div id="vpm-controls" class="algo-body" hidden>
           <div class="stepper-row">
-            <span class="field-label" id="vpm-label" data-i18n="field.conservatism">CONSERVATISM</span>
+            <span class="field-label" id="vpm-label" data-i18n="field.conservatism" data-i18n-title="tipf.conservatism" title="VPM-B conservatism +0…+5. Higher = larger critical bubble radii, longer deco.">CONSERVATISM</span>
             <div class="stepper" role="group" aria-labelledby="vpm-label">
               <button type="button" id="vpm-minus" aria-label="Decrease conservatism">&minus;</button>
               <span class="stepper-value num" id="vpm-value">+2</span>
@@ -116,31 +116,31 @@
         </div>
 
         <div class="settings-grid deco-grid">
-          <label for="set-descent"><span data-i18n="field.descent">DESCENT</span> <span class="unit u-rate">m/min</span></label>
+          <label for="set-descent" data-i18n-title="tipf.descent" title="Descent rate, used to compute travel time down to each level."><span data-i18n="field.descent">DESCENT</span> <span class="unit u-rate">m/min</span></label>
           <input type="number" id="set-descent" class="num-input" data-vkey="descentRate" min="1" max="99" step="1" inputmode="decimal">
 
-          <label for="set-ascent"><span data-i18n="field.ascent">ASCENT</span> <span class="unit u-rate">m/min</span></label>
+          <label for="set-ascent" data-i18n-title="tipf.ascent" title="Ascent rate, used between levels and stops and to size deco time."><span data-i18n="field.ascent">ASCENT</span> <span class="unit u-rate">m/min</span></label>
           <input type="number" id="set-ascent" class="num-input" data-vkey="ascentRate" min="1" max="99" step="1" inputmode="decimal">
 
-          <span class="field-label" id="laststop-label" data-i18n="field.lastStop">LAST STOP</span>
+          <span class="field-label" id="laststop-label" data-i18n="field.lastStop" data-i18n-title="tipf.lastStop" title="Shallowest decompression stop depth — 6 m (recommended) or 3 m.">LAST STOP</span>
           <div class="seg-control mini" role="group" aria-labelledby="laststop-label">
             <button type="button" id="laststop-3" data-laststop="3" aria-pressed="false">3 m</button>
             <button type="button" id="laststop-6" data-laststop="6" class="active" aria-pressed="true">6 m</button>
           </div>
 
-          <span class="field-label" id="water-label" data-i18n="field.water">WATER</span>
+          <span class="field-label" id="water-label" data-i18n="field.water" data-i18n-title="tipf.water" title="Water type. Salt = 10 m/bar, fresh = 10.3 m/bar; changes the depth↔pressure conversion.">WATER</span>
           <div class="seg-control mini" role="group" aria-labelledby="water-label">
             <button type="button" id="water-salt" data-water="salt" class="active" aria-pressed="true" data-i18n="field.salt">SALT</button>
             <button type="button" id="water-fresh" data-water="fresh" aria-pressed="false" data-i18n="field.fresh">FRESH</button>
           </div>
 
-          <label for="set-sp"><span data-i18n="field.surface">SURFACE</span> <span class="unit">bar</span></label>
+          <label for="set-sp" data-i18n-title="tipf.surface" title="Surface (atmospheric) pressure in bar — lower it for altitude diving."><span data-i18n="field.surface">SURFACE</span> <span class="unit">bar</span></label>
           <input type="number" id="set-sp" class="num-input" data-vkey="surfacePressure" min="0.5" max="1.2" step="0.001" inputmode="decimal">
 
-          <label for="set-ppo2"><span data-i18n="field.ppo2deco">ppO&#8322; DECO</span> <span class="unit">bar</span></label>
+          <label for="set-ppo2" data-i18n-title="tipf.ppo2deco" title="Maximum ppO₂ allowed on deco gas; sets each deco gas’s switch depth (MOD)."><span data-i18n="field.ppo2deco">ppO&#8322; DECO</span> <span class="unit">bar</span></label>
           <input type="number" id="set-ppo2" class="num-input" data-vkey="ppO2MaxDeco" min="0.4" max="2" step="0.01" inputmode="decimal">
 
-          <label class="check-row" for="set-incl-travel">
+          <label class="check-row" for="set-incl-travel" data-i18n-title="tipf.inclTravel" title="When on, a level’s time counts the descent/ascent travel into that level; when off, it is pure bottom time at depth.">
             <input type="checkbox" id="set-incl-travel">
             <span data-i18n="field.inclTravel">LEVEL TIME INCLUDES TRAVEL</span>
           </label>
@@ -150,16 +150,16 @@
       <details class="panel collapsible" id="panel-gasplan">
         <summary><span class="panel-title" data-i18n="box.gasplan" data-i18n-title="tip.gasplan" title="Gas-supply planning: your breathing rate (SAC), reserve rule and a fixed extra reserve. These size your cylinders; they do not affect the deco schedule.">Gas Planning</span><span class="summary-marker" aria-hidden="true"></span></summary>
         <div class="settings-grid">
-          <label for="set-sac-bottom"><span data-i18n="field.sacBottom">SAC BOTTOM</span> <span class="unit u-sac">L/min</span></label>
+          <label for="set-sac-bottom" data-i18n-title="tipf.sacBottom" title="Surface air consumption on the bottom phase (L/min at 1 bar) — sizes bottom-gas need."><span data-i18n="field.sacBottom">SAC BOTTOM</span> <span class="unit u-sac">L/min</span></label>
           <input type="number" id="set-sac-bottom" class="num-input" data-vkey="sacBottom" min="1" max="99" step="0.1" inputmode="decimal">
 
-          <label for="set-sac-deco"><span data-i18n="field.sacDeco">SAC DECO</span> <span class="unit u-sac">L/min</span></label>
+          <label for="set-sac-deco" data-i18n-title="tipf.sacDeco" title="Surface air consumption during stops/ascent (L/min at 1 bar) — sizes deco-gas need."><span data-i18n="field.sacDeco">SAC DECO</span> <span class="unit u-sac">L/min</span></label>
           <input type="number" id="set-sac-deco" class="num-input" data-vkey="sacDeco" min="1" max="99" step="0.1" inputmode="decimal">
 
-          <label for="set-extra-reserve"><span data-i18n="field.extraReserve">EXTRA RESERVE</span> <span class="unit u-press">bar</span></label>
+          <label for="set-extra-reserve" data-i18n-title="tipf.extraReserve" title="Fixed reserve added on top of the reserve rule, on every gas (bar)."><span data-i18n="field.extraReserve">EXTRA RESERVE</span> <span class="unit u-press">bar</span></label>
           <input type="number" id="set-extra-reserve" class="num-input" data-vkey="extraReserveBar" min="0" step="5" inputmode="decimal">
 
-          <label for="gas-reserve" data-i18n="field.reserveRule">RESERVE RULE</label>
+          <label for="gas-reserve" data-i18n="field.reserveRule" data-i18n-title="tipf.reserveRule" title="How much gas to hold back: thirds, half, min-gas (rock-bottom), or none.">RESERVE RULE</label>
           <select id="gas-reserve" aria-label="Gas reserve rule">
             <option value="thirds" data-i18n="reserve.thirds">Rule of thirds</option>
             <option value="half" data-i18n="reserve.half">Half + half</option>
