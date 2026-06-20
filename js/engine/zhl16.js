@@ -39,6 +39,19 @@
   const A_HE = [1.6189, 1.3830, 1.1919, 1.0458, 0.9220, 0.8205, 0.7305, 0.6502, 0.5950, 0.5545, 0.5333, 0.5189, 0.5181, 0.5176, 0.5172, 0.5119];
   const B_HE = [0.4770, 0.5747, 0.6527, 0.7223, 0.7582, 0.7957, 0.8279, 0.8553, 0.8757, 0.8903, 0.8997, 0.9073, 0.9122, 0.9171, 0.9217, 0.9267];
 
+  // ZHL-16B nitrogen a-coefficients (Buhlmann "table" parameterization; Baker,
+  // "Understanding M-values"). Differs from the ZHL-16C set above ONLY at
+  // compartments 5..15 (B uses larger a-values there, i.e. stiffer M-values /
+  // more conservative); compartments 1..4 and 16 are identical to C. The N2 b
+  // coefficients and ALL helium a/b coefficients are identical to C, and the
+  // half-times are shared. (NB: the well-known 1.2599/0.5050 compartment-1
+  // figure is ZHL-16*A*, not B — B's compartment 1 equals C's 1.1696/0.5578.)
+  // C set verified verbatim against Subsurface core/deco.cpp.
+  const A_N2_B = [1.1696, 1.0000, 0.8618, 0.7562, 0.6667, 0.5600, 0.4947, 0.4500, 0.4187, 0.3798, 0.3497, 0.3223, 0.2850, 0.2737, 0.2523, 0.2327];
+  const B_N2_B = B_N2;   // identical to ZHL-16C
+  const A_HE_B = A_HE;   // identical to ZHL-16C
+  const B_HE_B = B_HE;   // identical to ZHL-16C
+
   // NOAA single-exposure CNS limits: ppO2 (bar) -> max minutes.
   // The toxicity RATE (1/limit per minute) is interpolated linearly between
   // points; below 0.5 bar there is no CNS load; above 1.6 bar the 1.5->1.6
@@ -103,13 +116,13 @@
   //   Ptol = (Pcomp - a*gf) / (gf/b + 1 - gf)
   // with a/b weighted by the inert-gas mix in the compartment. Returns the
   // maximum (deepest requirement) over all 16 compartments.
-  function maxTolAmb(pn, ph, gf) {
+  function maxTolAmb(pn, ph, gf, ctx) {
     let m = -Infinity;
     for (let i = 0; i < NC; i++) {
       const pt = pn[i] + ph[i];
       if (pt <= 0) continue;
-      const a = (A_N2[i] * pn[i] + A_HE[i] * ph[i]) / pt;
-      const b = (B_N2[i] * pn[i] + B_HE[i] * ph[i]) / pt;
+      const a = (ctx.aN2[i] * pn[i] + ctx.aHe[i] * ph[i]) / pt;
+      const b = (ctx.bN2[i] * pn[i] + ctx.bHe[i] * ph[i]) / pt;
       const ptol = (pt - a * gf) / (gf / b + 1 - gf);
       if (ptol > m) m = ptol;
     }
@@ -117,7 +130,7 @@
   }
 
   function ceilingDepth(pn, ph, gf, ctx) {
-    return Math.max(0, (maxTolAmb(pn, ph, gf) - ctx.sp) * ctx.mpb);
+    return Math.max(0, (maxTolAmb(pn, ph, gf, ctx) - ctx.sp) * ctx.mpb);
   }
 
   // Gradient factor at depth d for a slope anchored at the first stop:
@@ -159,6 +172,14 @@
       segments: [],
       customStops: null,            // verify mode: replay these exact stops
     };
+
+    // Coefficient variant: 'B' selects the ZHL-16B nitrogen a-table; anything
+    // else (default, incl. 'ZHL16C'/'VPMB'/undefined) uses ZHL-16C unchanged.
+    ctx.variant = (input.algorithm === 'ZHL16B') ? 'B' : 'C';
+    ctx.aN2 = ctx.variant === 'B' ? A_N2_B : A_N2;
+    ctx.bN2 = ctx.variant === 'B' ? B_N2_B : B_N2;
+    ctx.aHe = ctx.variant === 'B' ? A_HE_B : A_HE;
+    ctx.bHe = ctx.variant === 'B' ? B_HE_B : B_HE;
 
     if (!(sp > 0.5 && sp < 1.2)) errors.push('surfacePressure must be in (0.5, 1.2) bar');
     if (!(ctx.gfLo > 0 && ctx.gfHi > 0 && ctx.gfLo <= 1.5 && ctx.gfHi <= 1.5)) errors.push('gradient factors must be in 1..150');
@@ -554,9 +575,9 @@
   // ---------------------------------------------------------------------
   // Planner
   // ---------------------------------------------------------------------
-  function emptyResult(params, errors, warnings) {
+  function emptyResult(params, errors, warnings, algorithm) {
     return {
-      ok: false, errors: errors, warnings: warnings, algorithm: 'ZHL16C', params: params,
+      ok: false, errors: errors, warnings: warnings, algorithm: algorithm || 'ZHL16C', params: params,
       table: [], stops: [], noDeco: false, ndl: null, firstStopDepth: null,
       totalRuntime: 0, totalDecoTime: 0, gasUsage: [], oxygen: { cns: 0, otu: 0 },
       profile: [], ceilingProfile: [], finalTissues: [], verify: null,
@@ -574,8 +595,9 @@
       water: def(input.water, 'salt'),
     };
     const warnings = [];
+    const algoOut = input.algorithm === 'ZHL16B' ? 'ZHL16B' : 'ZHL16C';
     const norm = normalize(input);
-    if (norm.errors.length) return emptyResult(params, norm.errors, warnings);
+    if (norm.errors.length) return emptyResult(params, norm.errors, warnings, algoOut);
     const ctx = norm.ctx;
 
     // --- Descent and bottom/level segments ---
@@ -627,7 +649,7 @@
         if (ceilingDepth(sim.pn, sim.ph, gfNext, ctx) > next + EPS) {
           const mins = computeStopMinutes(sim, gfNext, next);
           if (mins === null) {
-            return emptyResult(params, ['deco stop at ' + s + ' m does not clear within 999 minutes'], warnings);
+            return emptyResult(params, ['deco stop at ' + s + ' m does not clear within 999 minutes'], warnings, algoOut);
           }
           holdAt(sim, 'stop', mins);
           sim.stops.push({ depth: s, time: mins, runtime: sim.runtime, gasId: sim.gasId });
@@ -688,8 +710,8 @@
     const finalTissues = [];
     for (let i = 0; i < NC; i++) {
       const pt = sim.pn[i] + sim.ph[i];
-      const a = pt > 0 ? (A_N2[i] * sim.pn[i] + A_HE[i] * sim.ph[i]) / pt : A_N2[i];
-      const b = pt > 0 ? (B_N2[i] * sim.pn[i] + B_HE[i] * sim.ph[i]) / pt : B_N2[i];
+      const a = pt > 0 ? (ctx.aN2[i] * sim.pn[i] + ctx.aHe[i] * sim.ph[i]) / pt : ctx.aN2[i];
+      const b = pt > 0 ? (ctx.bN2[i] * sim.pn[i] + ctx.bHe[i] * sim.ph[i]) / pt : ctx.bN2[i];
       const m0 = ctx.sp / b + a;      // surfacing M-value
       finalTissues.push({
         pN2: sim.pn[i], pHe: sim.ph[i], pTotal: pt,
@@ -701,7 +723,7 @@
       ok: true,
       errors: [],
       warnings: warnings,
-      algorithm: 'ZHL16C',
+      algorithm: ctx.variant === 'B' ? 'ZHL16B' : 'ZHL16C',
       params: params,
       table: sim.rows,
       stops: sim.stops,
@@ -733,6 +755,7 @@
       PH2O: PH2O,
       HT_N2: HT_N2, A_N2: A_N2, B_N2: B_N2,
       HT_HE: HT_HE, A_HE: A_HE, B_HE: B_HE,
+      A_N2_B: A_N2_B, B_N2_B: B_N2_B, A_HE_B: A_HE_B, B_HE_B: B_HE_B,
       initTissues: initTissues,
       loadConstant: loadConstant,
       loadTravel: loadTravel,
@@ -740,7 +763,10 @@
       ceilingDepth: ceilingDepth,
       gfAt: gfAt,
       cnsRate: cnsRate,
-      makeCtxLite: function (sp, water) { return { sp: sp, mpb: mpbFor(water || 'salt') }; },
+      makeCtxLite: function (sp, water) {
+        return { sp: sp, mpb: mpbFor(water || 'salt'),
+                 aN2: A_N2, bN2: B_N2, aHe: A_HE, bHe: B_HE };
+      },
     },
   };
 });

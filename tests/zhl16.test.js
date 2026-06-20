@@ -1,5 +1,5 @@
 /*
- * Tests for the ZHL-16C + gradient factors engine. Plain Node script,
+ * Tests for the ZHL-16C/ZHL-16B + gradient factors engine. Plain Node script,
  * no framework:
  *   node tests/zhl16.test.js
  * Prints "PASS name" / "FAIL name" lines and exits 1 on any failure.
@@ -598,6 +598,63 @@ function seedCustomStops(result) {
   const bad = DecoEngine.plan(baseInput({ customStops: [{ depth: 6, time: 5, gasId: 'nope' }] }));
   check('verify rejects unknown gas', !bad.ok && bad.errors.some(function (e) { return /unknown gas/.test(e); }),
     JSON.stringify(bad.errors));
+})();
+
+// ---------------------------------------------------------------------------
+// 17. ZHL-16B coefficient variant
+// ---------------------------------------------------------------------------
+(function () {
+  const I = DecoEngine._internal;
+  check('exposes ZHL-16B coefficient arrays (length 16)',
+    Array.isArray(I.A_N2_B) && I.A_N2_B.length === 16 &&
+    Array.isArray(I.B_N2_B) && Array.isArray(I.A_HE_B) && Array.isArray(I.B_HE_B));
+
+  // Compartment 1 N2 is identical to C (the 1.2599/0.5050 figure is ZHL-16A,
+  // NOT B); compartment 5 is B's first divergence from C.
+  check('ZHL-16B a_N2[0] equals C (1.1696, not the ZHL-16A 1.2599)',
+    Math.abs(I.A_N2_B[0] - 1.1696) < 1e-9, I.A_N2_B[0]);
+  check('ZHL-16B a_N2[4] = 0.6667 (stiffer than C 0.62)',
+    Math.abs(I.A_N2_B[4] - 0.6667) < 1e-9 && I.A_N2_B[4] > I.A_N2[4], I.A_N2_B[4]);
+
+  // N2 b and ALL He coefficients are identical between B and C.
+  let heSame = true, bSame = true;
+  for (let i = 0; i < 16; i++) {
+    if (I.A_HE_B[i] !== I.A_HE[i] || I.B_HE_B[i] !== I.B_HE[i]) heSame = false;
+    if (I.B_N2_B[i] !== I.B_N2[i]) bSame = false;
+  }
+  check('ZHL-16B helium coefficients identical to ZHL-16C', heSame);
+  check('ZHL-16B nitrogen b coefficients identical to ZHL-16C', bSame);
+
+  // a_N2 differs only at compartments 5..15 (1-based).
+  const diff = [];
+  for (let i = 0; i < 16; i++) if (I.A_N2_B[i] !== I.A_N2[i]) diff.push(i + 1);
+  check('ZHL-16B a_N2 differs from C only at compartments 5..15',
+    diff.join(',') === '5,6,7,8,9,10,11,12,13,14,15', diff.join(','));
+
+  // Plan-level: B and C produce distinct, deterministic schedules on the
+  // reference 45 m / 25 min trimix dive. Direction read from an actual run
+  // (B yields slightly LESS deco here — the binding compartment's effective
+  // M-value shifts; do not assume B is always more conservative).
+  const c = DecoEngine.plan(baseInput({ algorithm: 'ZHL16C' }));
+  const b = DecoEngine.plan(baseInput({ algorithm: 'ZHL16B' }));
+  const stops = function (r) { return JSON.stringify(r.stops.map(function (s) { return [s.depth, s.time]; })); };
+  check('ZHL16B run ok', b.ok, JSON.stringify(b.errors));
+  check('ZHL16B result.algorithm === ZHL16B', b.algorithm === 'ZHL16B', b.algorithm);
+  check('ZHL16C result.algorithm still ZHL16C', c.algorithm === 'ZHL16C', c.algorithm);
+  check('ZHL16B schedule differs from ZHL16C on the reference dive',
+    stops(b) !== stops(c) || b.totalDecoTime !== c.totalDecoTime);
+  // Golden values (deterministic; read off a real run).
+  check('ZHL16C golden stops on reference dive', stops(c) === '[[12,2],[9,3],[6,12]]', stops(c));
+  check('ZHL16B golden stops on reference dive', stops(b) === '[[12,2],[9,3],[6,11]]', stops(b));
+
+  // Default path: an input WITHOUT an algorithm field behaves exactly like
+  // ZHL-16C (regression lock — the C default must stay byte-for-byte).
+  const noAlgo = baseInput();
+  delete noAlgo.algorithm;
+  const r = DecoEngine.plan(noAlgo);
+  check('absent algorithm defaults to ZHL16C behavior',
+    r.ok && r.algorithm === 'ZHL16C' && stops(r) === '[[12,2],[9,3],[6,12]]',
+    r.algorithm + ' ' + stops(r));
 })();
 
 // ---------------------------------------------------------------------------

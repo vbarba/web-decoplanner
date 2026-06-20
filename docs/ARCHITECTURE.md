@@ -64,7 +64,12 @@ auto-switch at MOD on ascent (never to a leaner gas); CNS via the NOAA table
 
 ## ZHL-16C engine (`js/engine/zhl16.js`)
 
-Bühlmann ZHL-16C 16-compartment model with Erik Baker gradient factors.
+Bühlmann 16-compartment model with Erik Baker gradient factors. Ships both the
+ZHL-16C (default) and ZHL-16B nitrogen `a` coefficient sets; `plan()` selects per
+call via `input.algorithm === 'ZHL16B'` (resolved in `normalize`, threaded as
+`ctx.aN2/bN2/aHe/bHe`). The two variants share half-times, helium coefficients,
+N₂ `b`, and all kinetics — they differ only in the N₂ `a` values at compartments
+5–15 (B is stiffer there). `result.algorithm` echoes `'ZHL16B'` or `'ZHL16C'`.
 
 - Tissue primitives operate on plain arrays `pn[16]`, `ph[16]`: `loadConstant`
   (Haldane, constant depth) and a Schreiner solution for constant-rate depth

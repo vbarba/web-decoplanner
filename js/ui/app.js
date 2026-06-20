@@ -269,7 +269,7 @@
       if (segs.length) d.segments = segs;
     }
     if (d.units !== 'metric' && d.units !== 'imperial') d.units = 'metric';
-    if (d.algorithm !== 'ZHL16C' && d.algorithm !== 'VPMB') d.algorithm = 'ZHL16C';
+    if (d.algorithm !== 'ZHL16C' && d.algorithm !== 'ZHL16B' && d.algorithm !== 'VPMB') d.algorithm = 'ZHL16C';
     if (d.water !== 'salt' && d.water !== 'fresh') d.water = 'salt';
     if (d.lastStopDepth !== 3 && d.lastStopDepth !== 6) d.lastStopDepth = 6;
     state = d;
@@ -508,7 +508,7 @@
     });
     if (state.gases.length && !hasBottom) errors.push('At least one BOTTOM gas is required');
 
-    if (state.algorithm === 'ZHL16C') {
+    if (state.algorithm !== 'VPMB') {   // GF applies to both ZHL16C and ZHL16B
       if (!(state.gfLow >= 5 && state.gfLow <= 100)) bad('gfLow', 'GF low must be 5–100');
       if (!(state.gfHigh >= 5 && state.gfHigh <= 100)) bad('gfHigh', 'GF high must be 5–100');
       if (state.gfLow > state.gfHigh) { bad('gfLow'); bad('gfHigh', 'GF low cannot exceed GF high'); }
@@ -809,13 +809,15 @@
   }
 
   function renderAlgo() {
-    var zhl = state.algorithm === 'ZHL16C';
+    var isVpm = state.algorithm === 'VPMB';
+    var zhl = !isVpm;                       // ZHL16C or ZHL16B -> Buhlmann controls
     $('algo-zhl').classList.toggle('active', zhl);
     $('algo-zhl').setAttribute('aria-pressed', String(zhl));
-    $('algo-vpm').classList.toggle('active', !zhl);
-    $('algo-vpm').setAttribute('aria-pressed', String(!zhl));
-    $('zhl-controls').hidden = !zhl;
-    $('vpm-controls').hidden = zhl;
+    $('algo-vpm').classList.toggle('active', isVpm);
+    $('algo-vpm').setAttribute('aria-pressed', String(isVpm));
+    $('zhl-controls').hidden = isVpm;
+    $('vpm-controls').hidden = !isVpm;
+    setSeg('zhlvariant', state.algorithm === 'ZHL16B' ? 'zhl-b' : 'zhl-c');
     $('gf-low-num').value = state.gfLow;
     $('gf-low-range').value = state.gfLow;
     $('gf-high-num').value = state.gfHigh;
@@ -842,6 +844,7 @@
   function setSeg(group, activeId) {
     var ids = group === 'laststop' ? ['laststop-3', 'laststop-6']
             : group === 'water' ? ['water-salt', 'water-fresh']
+            : group === 'zhlvariant' ? ['zhl-c', 'zhl-b']
             : ['units-metric', 'units-imperial'];
     ids.forEach(function (id) {
       var on = id === activeId;
@@ -864,9 +867,12 @@
 
   function renderBadge() {
     var b = $('algo-badge');
-    b.textContent = state.algorithm === 'VPMB'
-      ? 'VPM-B · +' + state.vpmConservatism
-      : 'ZHL-16C · GF ' + Math.round(state.gfLow) + '/' + Math.round(state.gfHigh);
+    if (state.algorithm === 'VPMB') {
+      b.textContent = 'VPM-B · +' + state.vpmConservatism;
+    } else {
+      var label = state.algorithm === 'ZHL16B' ? 'ZHL-16B' : 'ZHL-16C';
+      b.textContent = label + ' · GF ' + Math.round(state.gfLow) + '/' + Math.round(state.gfHigh);
+    }
   }
 
   function renderPresets() {
@@ -1447,7 +1453,7 @@
     var lines = [];
     var algoLine = result.algorithm === 'VPMB'
       ? 'VPM-B +' + (result.params ? result.params.vpmConservatism : state.vpmConservatism)
-      : 'ZHL-16C+GF ' + (result.params ? result.params.gfLow + '/' + result.params.gfHigh : '');
+      : (result.algorithm === 'ZHL16B' ? 'ZHL-16B+GF ' : 'ZHL-16C+GF ') + (result.params ? result.params.gfLow + '/' + result.params.gfHigh : '');
     lines.push('HALDANE DECOMPRESSION PLAN');
     lines.push('MODEL ' + algoLine + '  WATER ' + state.water.toUpperCase() +
                '  SP ' + fmt(state.surfacePressure, 3) + ' bar  UNITS ' + state.units.toUpperCase());
@@ -1760,11 +1766,19 @@
 
     // --- algorithm
     $('algo-zhl').addEventListener('click', function () {
-      state.algorithm = 'ZHL16C'; renderAlgo(); onStateChanged();
+      // Switch to Buhlmann; preserve the chosen B/C variant if already on it.
+      if (state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
+      renderAlgo(); onStateChanged();
     });
     $('algo-vpm').addEventListener('click', function () {
       if (this.disabled) return;
       state.algorithm = 'VPMB'; renderAlgo(); onStateChanged();
+    });
+    // ZHL-16 coefficient variant sub-toggle (visible only under Buhlmann).
+    [['zhl-c', 'ZHL16C'], ['zhl-b', 'ZHL16B']].forEach(function (p) {
+      $(p[0]).addEventListener('click', function () {
+        state.algorithm = p[1]; renderAlgo(); onStateChanged();
+      });
     });
     function bindGf(numId, rangeId, key) {
       $(numId).addEventListener('input', function () {
