@@ -97,7 +97,7 @@
       ascentRate: 9,
       lastStopDepth: 6,
       ppO2MaxDeco: 1.61,
-      segmentTimesIncludeTravel: false,
+      segmentTimesIncludeTravel: true,
       sacBottom: 20,
       sacDeco: 16,
       gasReserve: 'mingas',
