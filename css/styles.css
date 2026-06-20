@@ -589,6 +589,21 @@ input[type="checkbox"]:checked::after {
    ============================================================= */
 
 .algo-body { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+/* A class-level `display` beats the UA `[hidden]{display:none}`, so the hidden
+   attribute alone would not hide an .algo-body — restore it explicitly. */
+.algo-body[hidden] { display: none; }
+
+/* ZHL coefficient sub-variant: label + C/B chips on one row, set off from the
+   GF inputs by a hairline so it reads as part of the model, not a GF field. */
+.zhl-variant-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.zhl-variant-group .seg-control.mini { flex: 0 0 auto; }
 
 .gf-row {
   display: grid;
