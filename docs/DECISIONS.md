@@ -3,6 +3,26 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## ZHL-16B offered as a coefficient sub-variant of Bühlmann
+
+ZHL-16B is selectable alongside the default ZHL-16C via a small sub-toggle that
+appears only when Bühlmann is the active model (hidden under VPM-B). The choice
+is **folded into `state.algorithm`** (`'ZHL16C' | 'ZHL16B' | 'VPMB'`) rather than
+a separate state field, so engine dispatch, `buildInput`, persistence, and
+old-plan migration all need no new plumbing — pre-existing saved plans only ever
+stored `'ZHL16C'`/`'VPMB'`, both still valid. The engine selects the `a`/`b`
+tables per call (threaded as `ctx.aN2/bN2/aHe/bHe`); the C default path is
+byte-for-byte unchanged, so all golden tests stayed green.
+
+A/B/C are the **same model** — identical half-times and GF math, differing only
+in the nitrogen `a` M-value coefficients. ZHL-16B (the "table" parameterization)
+is stiffer than C at compartments 5–15; N₂ `b` and all helium coefficients are
+identical to C. Coefficients taken from the published Bühlmann B table (Baker,
+"Understanding M-values"), with the C set verified verbatim against Subsurface
+`core/deco.cpp`. **Pitfall, recorded so it isn't reintroduced:** the well-known
+`1.2599 / 0.5050` compartment-1 figure is ZHL-16*A*, **not** B — ZHL-16B's
+compartment 1 equals C's `1.1696 / 0.5578`. A regression test pins this.
+
 ## Editable runtime table = engine "verify mode", not UI re-optimization
 
 The editable runtime table is backed by a **verify-exact** capability added to

@@ -82,6 +82,11 @@
         </div>
 
         <div id="zhl-controls" class="algo-body">
+          <span class="field-label" id="zhl-variant-label">COEFFICIENTS</span>
+          <div class="seg-control mini zhl-variant-toggle" id="zhl-variant" role="group" aria-labelledby="zhl-variant-label">
+            <button type="button" id="zhl-c" data-zhlvariant="ZHL16C" class="active" aria-pressed="true">ZHL-16C</button>
+            <button type="button" id="zhl-b" data-zhlvariant="ZHL16B" aria-pressed="false">ZHL-16B</button>
+          </div>
           <div class="gf-row">
             <label for="gf-low-num">GF&nbsp;LOW</label>
             <input type="number" id="gf-low-num" class="num-input" data-vkey="gfLow" min="5" max="100" step="1" inputmode="numeric">
