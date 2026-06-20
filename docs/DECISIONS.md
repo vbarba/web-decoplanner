@@ -34,8 +34,22 @@ Two related changes to the EDIT DECO (verify) flow:
      arrival** at the stop, matching the generate path; the chart marker lands at
      the real switch depth.
 
+   - *GF / Boyle anchor:* both engines' replay anchored the GF slope (ZHL) /
+     Boyle reference (VPM-B) at the user's **deepest custom row**. When that row is
+     a gas-switch depth *above* the first real deco-ceiling depth (e.g. switch at
+     21 m while the first ceiling is at 27 m), anchoring at 21 m tilts the slope
+     steeper and makes the verify ceiling stricter than the schedule generate
+     emitted — so a just-generated plan read as "✕ CEILING −1.6 m @ 21 m" the
+     instant you pressed EDIT DECO. Both replays now anchor the SAME way generate
+     does: ZHL at `firstStopCandidate`, VPM-B at the shared `computeFirstStop`
+     (extracted from `simulateAscent`), allowing a genuinely deeper user stop to
+     push the anchor deeper. The ZHL round-trip of a generated plan now verifies
+     at exactly 0 m exceedance; VPM-B retains a small (≤2 m) gradient-staleness
+     margin inherent to its frozen-gradient replay (documented below).
+
    A regression test in `tests/zhl16.test.js` asserts every switch gas lands on
-   its switch depth (the test helpers mirror the seeding).
+   its switch depth (the test helpers mirror the seeding), and the round-trip
+   tests assert a generated plan re-verifies as safe.
 
    *VPM-B verify margin:* the replay's verify scan uses frozen start-of-ascent
    gradients, so on the deepest ascent transition it can report a small (~1.5 m)

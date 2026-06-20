@@ -406,9 +406,16 @@
   // the displayed (GF-adjusted) ceiling.
   function replayCustomStops(sim) {
     const ctx = sim.ctx;
-    // Anchor the GF slope at the deepest custom stop so the displayed ceiling
-    // tapers from gfLow there toward gfHigh at the surface, as in generate mode.
-    sim.anchor = ctx.customStops[0].depth;
+    // Anchor the GF slope the SAME way generate does — at firstStopCandidate
+    // (the deepest deco-ceiling depth at gfLow, computed from the tissue state at
+    // the start of the ascent). The user's deepest custom row is often just a
+    // gas-switch depth (e.g. 21 m) ABOVE that candidate (e.g. 27 m); anchoring at
+    // the switch depth tilts the GF slope steeper and makes the verify ceiling
+    // stricter than the schedule generate emitted — so a freshly-generated plan
+    // would falsely read as a ceiling violation on entering EDIT DECO. Use the
+    // generate anchor; allow a deeper user stop to push it deeper still.
+    var candidate = firstStopCandidate(sim);
+    sim.anchor = Math.max(candidate, ctx.customStops[0].depth);
     let decoStartRt = null;
     for (let i = 0; i < ctx.customStops.length; i++) {
       const cs = ctx.customStops[i];

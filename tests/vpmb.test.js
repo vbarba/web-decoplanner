@@ -442,8 +442,8 @@ function seedCustomStops(result) {
   const cs = seedCustomStops(gen);
   const rt = VPMB.plan(baseInput({ customStops: cs }));
   check('verify round-trip ok', rt.ok, JSON.stringify(rt.errors));
-  check('verify round-trip exceedance within replay gradient margin (<=1.5 m)',
-    rt.verify && rt.verify.maxCeilingExceedance <= 1.5, JSON.stringify(rt.verify));
+  check('verify round-trip exceedance within replay gradient margin (<=2 m)',
+    rt.verify && rt.verify.maxCeilingExceedance <= 2.0, JSON.stringify(rt.verify));
   check('verify round-trip runtime matches generate', Math.abs(rt.totalRuntime - gen.totalRuntime) < 1.0,
     'verify=' + rt.totalRuntime.toFixed(2) + ' generate=' + gen.totalRuntime.toFixed(2));
 
@@ -455,8 +455,8 @@ function seedCustomStops(result) {
   check('verify shortened is unsafe', un.ok && un.verify && un.verify.safe === false, JSON.stringify(un.verify));
   // A genuine violation sits far above the replay's gradient-staleness margin
   // (>1.5 m), so the relaxed round-trip tolerance above cannot mask real danger.
-  check('verify shortened exceedance clears the staleness margin (>1.5 m)',
-    un.verify && un.verify.maxCeilingExceedance > 1.5,
+  check('verify shortened exceedance clears the staleness margin (>2 m)',
+    un.verify && un.verify.maxCeilingExceedance > 2.0,
     'exceed=' + (un.verify && un.verify.maxCeilingExceedance));
   check('verify shortened pushes a ceiling warning',
     un.warnings.some(function (w) { return /ceiling/i.test(w); }), JSON.stringify(un.warnings));

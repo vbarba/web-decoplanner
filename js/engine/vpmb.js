@@ -581,20 +581,14 @@
   // ascent scheduler (one pass with a fixed gradient set)
   // ========================================================================
 
-  function simulateAscent(P, start, grads, opts) {
-    const t = cloneT(start.t);
-    let depth = start.depth, runtime = start.runtime, gas = start.gas;
-    const rows = [], stops = [];
-    const errors = [];
-    let decoZoneRt = null;
-    let firstActualStop = null, firstStopArrivalRt = null;
-    const sampler = opts.sampler || null;
-
-    // ---- first stop (ceiling + Baker PROJECTED_ASCENT arrival check) ----
-    // Baker computes the ascent ceiling from the gas loadings at the START OF
-    // THE DECO ZONE (i.e. after the initial ascent from the bottom), not from
-    // the bottom itself; project the tissues there first.
-    const tDz = cloneT(t);
+  // First-stop depth (Baker ceiling + PROJECTED_ASCENT arrival check), computed
+  // from the gas loadings at the start of the deco zone. Returns { firstStop,
+  // firstStopP, error } — firstStop is 0 (firstStopP null) when no deco is owed.
+  // Shared by generate (simulateAscent) and verify (replayCustomStopsVPM) so both
+  // anchor the Boyle/GF reference at the SAME depth.
+  function computeFirstStop(P, start, grads) {
+    const depth = start.depth, gas = start.gas;
+    const tDz = cloneT(start.t);
     const dzRef = Math.min(Math.max(P.dz, 0), depth);
     if (dzRef < depth - EPS) {
       applyRamp(tDz, P.pAmb(depth), P.pAmb(dzRef), (depth - dzRef) / P.ascentRate, gas);
@@ -610,11 +604,26 @@
         firstStop += P.interval;
       }
       if (firstStop >= depth - EPS) {
-        errors.push('required first deco stop is at or below the bottom depth');
-        return { errors: errors };
+        return { firstStop: firstStop, firstStopP: null, error: 'required first deco stop is at or below the bottom depth' };
       }
     }
-    const firstStopP = firstStop > 0 ? P.pAmb(firstStop) : null;
+    return { firstStop: firstStop, firstStopP: firstStop > 0 ? P.pAmb(firstStop) : null, error: null };
+  }
+
+  function simulateAscent(P, start, grads, opts) {
+    const t = cloneT(start.t);
+    let depth = start.depth, runtime = start.runtime, gas = start.gas;
+    const rows = [], stops = [];
+    const errors = [];
+    let decoZoneRt = null;
+    let firstActualStop = null, firstStopArrivalRt = null;
+    const sampler = opts.sampler || null;
+
+    // ---- first stop (ceiling + Baker PROJECTED_ASCENT arrival check) ----
+    const fs = computeFirstStop(P, start, grads);
+    if (fs.error) { errors.push(fs.error); return { errors: errors }; }
+    const firstStop = fs.firstStop;
+    const firstStopP = fs.firstStopP;
 
     // pending stop rungs
     const pending = [];
@@ -781,7 +790,16 @@
     let depth = start.depth, runtime = start.runtime, gas = start.gas;
     const rows = [], stops = [];
     const cs = P.customStops;
-    const firstStopP = cs.length ? P.pAmb(cs[0].depth) : null;   // Boyle anchor
+    // Boyle/ceiling anchor: use the SAME first-stop depth generate derives (from
+    // the start-of-deco-zone loadings), not the user's deepest custom row — that
+    // row is often just a gas-switch depth above the real first stop, and
+    // anchoring there makes the verify ceiling stricter than the schedule
+    // generate emitted (a freshly-generated plan would falsely read unsafe). Let
+    // a genuinely deeper user stop push the anchor deeper.
+    const fs = computeFirstStop(P, start, grads);
+    let anchorDepth = fs.firstStop || 0;
+    if (cs.length && cs[0].depth > anchorDepth) anchorDepth = cs[0].depth;
+    const firstStopP = anchorDepth > 0 ? P.pAmb(anchorDepth) : null;
     let firstStopArrivalRt = null;
 
     function ceilNow() {
