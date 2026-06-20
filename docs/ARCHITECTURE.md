@@ -65,9 +65,12 @@ where a **gas SWITCH pins its (new) gas to the switch depth** (e.g. EAN50 at its
 STOP adds hold time. Pinning the gas to the switch depth — not the next stop
 down — is what keeps the deco gas in the right row when editing; the matching
 test helpers in `tests/zhl16.test.js` / `tests/vpmb.test.js` mirror this exactly
-and a regression test asserts the placement. A custom schedule is **kept and
-re-verified** when dive inputs change (not auto-cleared), and RESET TO COMPUTED
-clears `customStops` back to the generated plan.
+and a regression test asserts the placement. The replay itself **travels on the
+current gas and switches on arrival** at each stop (not before ascending), so a
+deco gas is never breathed below its switch depth and the chart's gas-switch
+marker sits at the real switch depth — see DECISIONS.md. A custom schedule is
+**kept and re-verified** when dive inputs change (not auto-cleared), and RESET TO
+COMPUTED clears `customStops` back to the generated plan.
 
 **FIX DECO (auto-add stops).** When an edited schedule is unsafe, instead of
 only flagging the offending row red the UI offers a `FIX DECO` action

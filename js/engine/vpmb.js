@@ -832,7 +832,12 @@
     checkViol(depth);
     for (let i = 0; i < cs.length; i++) {
       const stop = cs[i];
-      if (stop.gasId !== gas.id) {                  // 0-min switch marker row
+      // Travel on the CURRENT gas, then switch on arrival at the stop depth —
+      // never switch while still deep (e.g. EAN50 at 45 m, past its MOD). Mirrors
+      // the generate path and the ZHL engine; keeps the chart marker at the stop.
+      travelTo(stop.depth);
+      checkViol(depth);
+      if (stop.gasId !== gas.id) {                  // 0-min switch marker row, at depth
         gas = P.gasById[stop.gasId];
         const pamb = P.pAmb(depth);
         const sw = makeRow('switch', depth, depth, 0, runtime, gas);
@@ -840,8 +845,6 @@
         rows.push(sw);
         sampleNow(runtime, depth);
       }
-      travelTo(stop.depth);
-      checkViol(depth);
       if (firstStopArrivalRt === null) firstStopArrivalRt = runtime;
       holdAt(stop.depth, Math.max(0, stop.time), 'stop');
       checkViol(depth);

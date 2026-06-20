@@ -412,10 +412,14 @@
     let decoStartRt = null;
     for (let i = 0; i < ctx.customStops.length; i++) {
       const cs = ctx.customStops[i];
-      if (cs.gasId !== sim.gasId) switchTo(sim, cs.gasId, 0);  // 0-min switch marker
+      // Travel to the stop on the CURRENT gas, then switch on arrival — never
+      // switch while still deep (e.g. to EAN50 at 45 m, well past its MOD). This
+      // matches the generate path, which switches at the stop depth, and keeps
+      // the gas-switch marker on the chart at the stop where it belongs.
       travelTo(sim, cs.depth < sim.depth - EPS ? 'asc' : (cs.depth > sim.depth + EPS ? 'desc' : 'asc'),
                cs.depth, cs.depth < sim.depth ? ctx.ascentRate : ctx.descentRate);
       const arrivalRt = sim.runtime;
+      if (cs.gasId !== sim.gasId) switchTo(sim, cs.gasId, 0);  // 0-min switch marker, at depth
       holdAt(sim, 'stop', Math.max(0, cs.time));
       sim.stops.push({ depth: cs.depth, time: cs.time, runtime: sim.runtime, gasId: sim.gasId });
       if (decoStartRt === null) decoStartRt = arrivalRt;

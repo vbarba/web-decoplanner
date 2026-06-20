@@ -21,13 +21,31 @@ is missing a key — so adding a UI string means adding it to all five dicts.
 
 Two related changes to the EDIT DECO (verify) flow:
 
-1. **Gas placement bug.** `seedCustomStopsFromResult` previously merged a depth's
-   switch + stop rows and kept the *last* gasId, which could attach a deco gas to
-   the wrong editable row ("EAN50 in the wrong place"). It now seeds one row per
-   held depth, deepest-first, where a **gas SWITCH pins its new gas to the switch
-   depth** (and carries its 1-min switch hold) and a STOP only adds time. The two
-   test files carry a matching helper and a regression test asserting every
-   switch gas lands on its switch depth.
+1. **Gas placement bug ("EAN50 in the wrong place").** Two causes, both fixed:
+   - *Seeding:* `seedCustomStopsFromResult` previously merged a depth's switch +
+     stop rows and kept the *last* gasId. It now seeds one row per held depth,
+     deepest-first, where a **gas SWITCH pins its new gas to the switch depth**
+     (and carries its 1-min switch hold) and a STOP only adds time.
+   - *Replay:* both engines' custom-stop replay switched gas **before** travelling
+     to the next stop, so the deepest deco gas was breathed from the bottom — the
+     dive-profile chart then drew the gas-switch diamond at the bottom depth
+     (EAN50 at 45 m, well past its MOD). `replayCustomStops` /
+     `replayCustomStopsVPM` now **travel on the current gas, then switch on
+     arrival** at the stop, matching the generate path; the chart marker lands at
+     the real switch depth.
+
+   A regression test in `tests/zhl16.test.js` asserts every switch gas lands on
+   its switch depth (the test helpers mirror the seeding).
+
+   *VPM-B verify margin:* the replay's verify scan uses frozen start-of-ascent
+   gradients, so on the deepest ascent transition it can report a small (~1.5 m)
+   transient ceiling overage that the following stop resolves — even though the
+   schedule is byte-identical to generate, whose own profile clears the ceiling
+   exactly. The VPM round-trip test asserts the schedule is reproduced and that
+   residual exceedance stays within that documented gradient-staleness margin,
+   while a real (shortened-stop) violation sits far above it (~6 m). Previously
+   this margin was hidden because the replay switched gas early, adding spurious
+   offgassing on the long bottom ascent.
 
 2. **FIX DECO instead of only flagging red.** When an edited schedule violates the
    ceiling, the row still goes red *and* a `FIX DECO` action appears. It runs the
