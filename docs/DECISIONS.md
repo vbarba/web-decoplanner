@@ -3,6 +3,41 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## i18n covers UI chrome + tooltips only — engine output stays English
+
+Translations (en/es/fr/de/zh) live in a separate `js/ui/i18n.js`
+(`window.I18N`), applied by walking `data-i18n` / `data-i18n-title` /
+`data-i18n-ph` attributes. We deliberately **do not** translate engine
+warnings/errors: those are dynamic, composed strings (gas names, numbers, units)
+and translating them would mean threading a locale through both engines and
+risking the safety-critical message wording drifting per language. Scope is the
+~60 static UI strings plus the new box tooltips. Default language follows the
+browser (`I18N.detect()`); the manual choice persists in `state.lang` and, like
+`units`, is **excluded** from saved-dive snapshots (a display preference, not part
+of a dive). A parity test (`tests/i18n.test.js`) fails the build if any language
+is missing a key — so adding a UI string means adding it to all five dicts.
+
+## Deco-edit: pin the gas to its switch depth; offer FIX DECO over red-only
+
+Two related changes to the EDIT DECO (verify) flow:
+
+1. **Gas placement bug.** `seedCustomStopsFromResult` previously merged a depth's
+   switch + stop rows and kept the *last* gasId, which could attach a deco gas to
+   the wrong editable row ("EAN50 in the wrong place"). It now seeds one row per
+   held depth, deepest-first, where a **gas SWITCH pins its new gas to the switch
+   depth** (and carries its 1-min switch hold) and a STOP only adds time. The two
+   test files carry a matching helper and a regression test asserting every
+   switch gas lands on its switch depth.
+
+2. **FIX DECO instead of only flagging red.** When an edited schedule violates the
+   ceiling, the row still goes red *and* a `FIX DECO` action appears. It runs the
+   engine in generate mode (`computeSafeStops`) and merges that safe schedule into
+   the user's edits — adding missing stops and extending too-short ones, never
+   shortening a stop the diver lengthened — then shows a "what changed" note. We
+   kept it as an explicit button (not silent auto-correct on every keystroke) so
+   the diver stays in control of their edits and can still *see* the gap; the
+   verdict chip and red row remain until they click.
+
 ## ZHL-16B offered as a coefficient sub-variant of Bühlmann
 
 ZHL-16B is selectable alongside the default ZHL-16C via a small sub-toggle that

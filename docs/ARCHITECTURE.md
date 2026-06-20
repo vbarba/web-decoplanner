@@ -1,6 +1,6 @@
 # HALDANE — architecture deep-dive
 
-Plain HTML/CSS/JS, zero dependencies, no build step, no network. Four JS files
+Plain HTML/CSS/JS, zero dependencies, no build step, no network. Five JS files
 load in order (see `index.html`), each a UMD-style IIFE that attaches one global
 in the browser and `module.exports` under Node. `js/ui/app.js` orchestrates.
 
@@ -8,11 +8,20 @@ in the browser and `module.exports` under Node. `js/ui/app.js` orchestrates.
 index.html ──loads──▶ js/engine/zhl16.js  → window.DecoEngine
                       js/engine/vpmb.js   → window.VPMB
                       js/ui/charts.js     → window.Charts
+                      js/ui/i18n.js       → window.I18N   (UI translations)
                       js/ui/app.js        (orchestrator; no global)
 css/styles.css        all styling
 tests/zhl16.test.js   node, no framework
 tests/vpmb.test.js    node, no framework
+tests/i18n.test.js    node, no framework
 ```
+
+**Three-column layout.** The `.layout` grid is `rail | results | charts-col`:
+inputs on the left, runtime table + tiles + gas requirements in the middle, and
+the Dive-profile and Tissue-loading charts in a dedicated right column. Below
+~1320 px the charts column drops under the results; below ~980 px everything
+stacks. Both `.results` and `.charts-col` participate in the reveal/stale
+animations (see `revealPanels()` / the `.stale` toggle in `renderResults`).
 
 ## The engine contract (the spine)
 
@@ -49,10 +58,25 @@ whenever `customStops` is absent). The result then carries
 firstViolationDepth, firstViolationTime }` and a "ceiling" warning when unsafe.
 Both engines implement this additively (ZHL: `replayCustomStops`; VPM-B:
 `replayCustomStopsVPM`, which reuses the start-of-ascent gradients and skips the
-CVA loop). The UI seeds editable rows from a computed plan by merging each
-depth's switch + stop holds (`seedCustomStopsFromResult` in `app.js`); a custom
-schedule is **kept and re-verified** when dive inputs change (not auto-cleared),
-and RESET TO COMPUTED clears `customStops` back to the generated plan.
+CVA loop). The UI seeds editable rows from a computed plan with
+`seedCustomStopsFromResult` in `app.js`: one row per held depth, deepest-first,
+where a **gas SWITCH pins its (new) gas to the switch depth** (e.g. EAN50 at its
+21 m switch, O₂ at its 6 m switch) and contributes its 1-min switch hold, and a
+STOP adds hold time. Pinning the gas to the switch depth — not the next stop
+down — is what keeps the deco gas in the right row when editing; the matching
+test helpers in `tests/zhl16.test.js` / `tests/vpmb.test.js` mirror this exactly
+and a regression test asserts the placement. A custom schedule is **kept and
+re-verified** when dive inputs change (not auto-cleared), and RESET TO COMPUTED
+clears `customStops` back to the generated plan.
+
+**FIX DECO (auto-add stops).** When an edited schedule is unsafe, instead of
+only flagging the offending row red the UI offers a `FIX DECO` action
+(`fixDeco()` in `app.js`). It runs the engine in generate mode
+(`computeSafeStops()`), then merges that safe schedule into the user's edits —
+**adding** any missing stop depths and **extending** stops that are too short,
+never shortening a stop the diver lengthened — and shows a "what changed" note
+(`showFixNote`). The red `row-violation` styling and verdict chip remain so the
+gap is still visible until fixed.
 
 **Both engines implement these behaviors identically — change one, mirror the
 other:** travel at descent/ascent rates; `segmentTimesIncludeTravel` deducts
@@ -158,6 +182,35 @@ liters`) and compares against the usable fraction of the start pressure. **This
 means supply changes never touch the engines or invalidate engine tests**, and a
 reserve/start-pressure change re-renders cards *without* re-planning.
 
+The rail boxes are split by concern: **Dive** (profile), **Gases**, **Deco
+Settings** (algorithm + GF/VPM, rates, last stop, water, surface, ppO₂, travel
+toggle), **Gas Planning** (SAC, reserve rule, extra reserve), and **Saved
+Dives**. All but Dive are collapsible `<details class="panel collapsible">`;
+Gases starts collapsed, the rest open. Each box title carries a `title` /
+`data-i18n-title` tooltip explaining the box.
+
+### Saved dives are UI-only too
+
+`localStorage['haldane-dives-v1']` holds named full-snapshot plans
+(`{name, ts, dive:{segments, gases, customStops, settings}}`), separate from the
+auto-saved current plan. `snapshotCurrentDive` / `applyDive` / `saveDive` /
+`deleteDive` / `exportDives` / `importDives` in `app.js` manage it; `applyDive`
+reuses the same defensive coercion as `loadState` (factored into `coerceState`).
+Units and language are **excluded** from a snapshot — they are display
+preferences, not part of a dive.
+
+### Internationalization (`js/ui/i18n.js`)
+
+UI chrome and tooltips (not engine output) are translated into 5 languages
+(en/es/fr/de/zh). `window.I18N.t(key)` looks up the active language, falling back
+to English then to the raw key. `app.js` translates in place by walking elements
+carrying `data-i18n` (textContent), `data-i18n-title` (tooltip) and
+`data-i18n-ph` (placeholder) in `applyI18n()`. The language defaults to the
+browser (`I18N.detect()`), is overridable via the top-bar `#lang-select`, and the
+explicit choice persists in `state.lang`. `tests/i18n.test.js` locks key parity
+across all languages plus fallback/detection. Engine warnings/errors stay in
+English by design.
+
 ## Units
 
 All internal math is **metric** (msw, minutes, bar absolute, liters); imperial is
@@ -172,7 +225,8 @@ sequence of assertions inside IIFEs, `ALL TESTS PASSED` + `process.exit(0/1)`.
 No framework, no single-test runner (comment out checks or early-exit to isolate
 one). They `require()` the engine modules and use the engines' `_internal`/`_test`
 exports. VPM tests include a Baker VPMDECO reference dive and Subsurface
-benchmark dives.
+benchmark dives. `tests/i18n.test.js` requires `js/ui/i18n.js` and verifies key
+parity across all 5 languages, the English fallback, and browser detection.
 
 ## Deploy
 

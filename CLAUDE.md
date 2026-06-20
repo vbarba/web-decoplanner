@@ -24,8 +24,9 @@ open index.html                 # open directly, or…
 python3 -m http.server 8741     # serve, then visit http://localhost:8741
 
 # Tests — plain Node scripts, no framework, no packages:
-node tests/zhl16.test.js        # Bühlmann engine suite
+node tests/zhl16.test.js        # Bühlmann engine suite (incl. deco-edit seed/placement)
 node tests/vpmb.test.js         # VPM-B suite (incl. Baker VPMDECO reference + Subsurface benchmarks)
+node tests/i18n.test.js         # i18n key-parity + fallback + browser detection
 node js/ui/charts.js            # charts self-check (silent on success, exit 0)
 ```
 
@@ -33,13 +34,14 @@ Each test file prints `PASS`/`FAIL` per check, `ALL TESTS PASSED` at the end, an
 
 ## Architecture
 
-Four files load in order (see `index.html`), each attaching one global; `js/ui/app.js` orchestrates:
+Five files load in order (see `index.html`), each attaching one global; `js/ui/app.js` orchestrates:
 
 | File | Global | Role |
 | --- | --- | --- |
 | `js/engine/zhl16.js` | `window.DecoEngine` | Bühlmann ZHL-16C + gradient factors |
 | `js/engine/vpmb.js` | `window.VPMB` | VPM-B (critical-volume algorithm + Boyle compensation) |
 | `js/ui/charts.js` | `window.Charts` | SVG charts built via DOM (no canvas/libs) |
+| `js/ui/i18n.js` | `window.I18N` | UI-chrome + tooltip translations (en/es/fr/de/zh) |
 | `js/ui/app.js` | — | Form state, input building, engine dispatch, result rendering |
 
 **The shared engine contract is the spine of the codebase.** Both engines expose `<NS>.plan(input) -> result` with identical shapes, so the UI treats them interchangeably. When changing one engine's behavior, the **other engine and the UI must stay consistent with the same contract** — schedule conventions (stop ladder, gas auto-switch at MOD, `lastStopDepth` handling, CNS/OTU, gas-usage formula, profile sampling) are implemented identically in both engines by design. The canonical description of `input` and `result` is the block comment near the top of `js/engine/zhl16.js`; `result` carries `ok/errors/warnings`, `table` (row `phase`: `desc|level|asc|switch|stop`), `stops`, `gasUsage`, `oxygen` (cns/otu), `profile`, `ceilingProfile`, `finalTissues`.
@@ -63,3 +65,6 @@ Four files load in order (see `index.html`), each attaching one global; `js/ui/a
 - `app.js` is one large IIFE. State lives in a single `state` object, persisted to `localStorage` key `haldane-plan-v1`; `loadState()` migrates older saved plans field-by-field (tolerate and default missing fields — do not assume a stored plan has newer fields like `cyl`/`startBar`/`gasReserve`).
 - Inputs use delegated listeners on `#segments-body` / `#gases-list` keyed by `data-seg`/`data-gas` + `data-field`; validation is driven by `data-vkey` (see `applyValidation`, which toggles `.invalid` on any `.rail [data-vkey]`).
 - Dropdowns are **native `<select>`** by deliberate choice — a custom-listbox replacement was tried and reverted because the custom popup broke on real clicks; only the dark/phosphor `<option>` styling that browsers honor is applied. Prefer native form controls.
+- **Saved dives** are UI-only, in `localStorage['haldane-dives-v1']` (separate from the auto-saved current plan). Each is a full snapshot `{name, ts, dive:{segments, gases, customStops, settings}}` minus units/language. See `snapshotCurrentDive`/`applyDive`/`saveDive`/`exportDives`/`importDives`; `applyDive` reuses the `coerceState` validation shared with `loadState`.
+- **i18n is UI-chrome + tooltips only** (`js/ui/i18n.js`, `window.I18N`); engine warnings/errors stay English. `applyI18n()` in `app.js` walks `data-i18n` (text), `data-i18n-title` (tooltip), `data-i18n-ph` (placeholder). Default language = browser (`I18N.detect()`), overridable via `#lang-select`, persisted in `state.lang`. When adding a UI string, add the key to **all 5** language dicts (the `tests/i18n.test.js` parity check enforces this) and tag the element with `data-i18n`.
+- **Deco editing (EDIT DECO):** `seedCustomStopsFromResult` pins each gas-switch's gas to its switch depth (deepest-first) — this is the fix for deco gases appearing in the wrong row; the test helpers in `tests/zhl16.test.js`/`tests/vpmb.test.js` mirror it and a regression test locks it. `FIX DECO` (`fixDeco()`) auto-adds/extends stops from a generate-mode plan to clear the ceiling rather than only flagging the row red.
