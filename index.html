@@ -156,6 +156,22 @@
         </div>
       </details>
 
+      <details class="panel collapsible" id="panel-dives">
+        <summary><span class="panel-title">Saved Dives</span><span class="summary-marker" aria-hidden="true"></span></summary>
+        <div class="dives-body">
+          <div class="dives-save-row">
+            <input type="text" id="dive-name" placeholder="Name this dive" maxlength="60" autocomplete="off">
+            <button type="button" class="ghost-btn" id="dive-save-btn">SAVE</button>
+          </div>
+          <div class="dives-list" id="dives-list"></div>
+          <div class="dives-io">
+            <button type="button" class="ghost-btn" id="dives-export-btn">EXPORT</button>
+            <button type="button" class="ghost-btn" id="dives-import-btn">IMPORT</button>
+            <input type="file" id="dives-import-file" accept="application/json" hidden>
+          </div>
+        </div>
+      </details>
+
       <div class="plan-dock">
         <span class="plan-wrap" id="plan-wrap">
           <button type="button" class="plan-btn" id="plan-btn">PLAN&nbsp;DIVE</button>

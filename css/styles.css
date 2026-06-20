@@ -333,6 +333,7 @@ body {
    ============================================================= */
 
 input[type="number"],
+input[type="text"],
 select {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -345,8 +346,8 @@ select {
   min-width: 0;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-input[type="number"]:hover, select:hover { border-color: rgba(120, 180, 200, .34); }
-input[type="number"]:focus, select:focus {
+input[type="number"]:hover, input[type="text"]:hover, select:hover { border-color: rgba(120, 180, 200, .34); }
+input[type="number"]:focus, input[type="text"]:focus, select:focus {
   outline: none;
   border-color: var(--phosphor);
   box-shadow: 0 0 0 1px rgba(53, 224, 194, .35), var(--glow);
@@ -725,6 +726,72 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
   padding-top: 4px;
 }
+
+/* =============================================================
+   SAVED DIVES — named full-snapshot plans
+   ============================================================= */
+
+.dives-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dives-save-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dives-save-row input[type="text"] { flex: 1; }
+.dives-save-row .ghost-btn { flex: 0 0 auto; }
+
+.dives-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dives-empty {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--dim);
+  margin: 2px 0;
+}
+.dive-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 5px;
+  padding: 8px 10px;
+  background: rgba(4, 10, 16, .30);
+  transition: border-color .2s ease, background .2s ease;
+}
+.dive-item:hover { border-color: var(--hairline); }
+.dive-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dive-name {
+  font-size: 12.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dive-ts {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: .04em;
+}
+.dive-item .ghost-btn { flex: 0 0 auto; }
+
+.dives-io {
+  display: flex;
+  gap: 8px;
+}
+.dives-io .ghost-btn { flex: 1; }
 
 /* =============================================================
    PLAN BUTTON — sticky primary

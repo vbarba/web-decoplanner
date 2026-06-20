@@ -13,6 +13,13 @@
      Constants
   ---------------------------------------------------------- */
   var LS_KEY = 'haldane-plan-v1';
+  var DIVES_KEY = 'haldane-dives-v1';
+  // Settings captured in a saved-dive snapshot — everything in defaults() except
+  // units (a display preference, not part of the dive) and the profile arrays
+  // (segments/gases/customStops, stored alongside as their own fields).
+  var SETTINGS_FIELDS = ['algorithm', 'gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure',
+    'water', 'descentRate', 'ascentRate', 'lastStopDepth', 'ppO2MaxDeco',
+    'segmentTimesIncludeTravel', 'sacBottom', 'sacDeco', 'gasReserve', 'extraReserveBar', 'showTravel'];
   var M2FT = 3.28084;
   var L_PER_CUFT = 28.3168;
   var STOP_INTERVAL = 3;       // m — fixed per contract
@@ -114,6 +121,7 @@
   var gasSeq = 0;              // unique id counter for added gases
   var planTimer = null;
   var copyTimer = null;
+  var saveTimer = null;
   var hasEngine = false, hasVPM = false, hasCharts = false;
 
   var reduceMotion = false;
@@ -270,10 +278,180 @@
       if (segs.length) d.segments = segs;
     }
     if (d.units !== 'metric' && d.units !== 'imperial') d.units = 'metric';
-    if (d.algorithm !== 'ZHL16C' && d.algorithm !== 'ZHL16B' && d.algorithm !== 'VPMB') d.algorithm = 'ZHL16C';
-    if (d.water !== 'salt' && d.water !== 'fresh') d.water = 'salt';
-    if (d.lastStopDepth !== 3 && d.lastStopDepth !== 6) d.lastStopDepth = 6;
+    coerceState(d);
     state = d;
+  }
+
+  // Shared post-load coercion: clamp model/water/last-stop, normalise the reserve
+  // rule, and re-run the gas cylinder/start-pressure migration. Used by both
+  // loadState (restore) and applyDive (load a saved dive). Mutates `s` in place.
+  function coerceState(s) {
+    if (s.algorithm !== 'ZHL16C' && s.algorithm !== 'ZHL16B' && s.algorithm !== 'VPMB') s.algorithm = 'ZHL16C';
+    if (s.water !== 'salt' && s.water !== 'fresh') s.water = 'salt';
+    if (s.lastStopDepth !== 3 && s.lastStopDepth !== 6) s.lastStopDepth = 6;
+    if (!RESERVE_RULES[s.gasReserve]) s.gasReserve = 'thirds';
+    if (Array.isArray(s.gases)) {
+      s.gases.forEach(function (g) {
+        if (typeof g.cyl !== 'string' || !cylPreset(g.cyl)) {
+          g.cyl = (g.type === 'deco') ? 's80' : 'd2x12';
+        }
+        if (typeof g.startBar !== 'number' || !isFinite(g.startBar) || g.startBar <= 0) {
+          g.startBar = cylPreset(g.cyl).ratedBar;
+        }
+      });
+    }
+  }
+
+  /* ----------------------------------------------------------
+     Saved dives — named full-snapshot plans, stored separately
+     from the auto-saved current plan. UI-only; engines untouched.
+  ---------------------------------------------------------- */
+  function loadDives() {
+    var raw = null;
+    try { raw = localStorage.getItem(DIVES_KEY); } catch (e) { /* ignore */ }
+    if (!raw) return [];
+    var list;
+    try { list = JSON.parse(raw); } catch (e) { return []; }
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (r) {
+      return r && typeof r.name === 'string' && r.dive && typeof r.dive === 'object';
+    });
+  }
+  function persistDives(list) {
+    try { localStorage.setItem(DIVES_KEY, JSON.stringify(list)); } catch (e) { /* private mode */ }
+  }
+
+  // Deep-copy the current plan into a portable snapshot record.
+  function snapshotCurrentDive() {
+    var settings = {};
+    SETTINGS_FIELDS.forEach(function (k) { settings[k] = state[k]; });
+    return {
+      settings: settings,
+      segments: state.segments.map(function (s) { return { depth: s.depth, time: s.time, gasId: s.gasId }; }),
+      gases: state.gases.map(function (g) {
+        return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type, cyl: g.cyl, startBar: g.startBar };
+      }),
+      customStops: (state.customStops && state.customStops.length)
+        ? state.customStops.map(function (s) { return { depth: s.depth, time: s.time, gasId: s.gasId }; })
+        : null
+    };
+  }
+
+  // Restore a saved dive onto `state`, defensively (mirrors loadState validation).
+  // Leaves state.units untouched — units are a display preference, not part of the dive.
+  function applyDive(dive) {
+    if (!dive || typeof dive !== 'object') return;
+    var d = defaults();
+    d.units = state.units;
+    var src = dive.settings || {};
+    ['algorithm', 'water', 'gasReserve'].forEach(function (k) {
+      if (typeof src[k] === 'string') d[k] = src[k];
+    });
+    ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
+     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar']
+      .forEach(function (k) { if (typeof src[k] === 'number' && isFinite(src[k])) d[k] = src[k]; });
+    if (typeof src.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = src.segmentTimesIncludeTravel;
+    if (typeof src.showTravel === 'boolean') d.showTravel = src.showTravel;
+
+    if (Array.isArray(dive.gases) && dive.gases.length) {
+      var gs = dive.gases.filter(function (g) {
+        return g && typeof g.id === 'string' &&
+               typeof g.fO2 === 'number' && typeof g.fHe === 'number' &&
+               (g.type === 'bottom' || g.type === 'deco');
+      }).map(function (g) {
+        return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type, cyl: g.cyl, startBar: g.startBar };
+      });
+      if (gs.length) d.gases = gs;
+    }
+    if (Array.isArray(dive.segments) && dive.segments.length) {
+      var segs = dive.segments.filter(function (sg) {
+        return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
+               typeof sg.gasId === 'string';
+      });
+      if (segs.length) d.segments = segs;
+    }
+    if (Array.isArray(dive.customStops)) {
+      var cstops = dive.customStops.filter(function (cs) {
+        return cs && typeof cs.depth === 'number' && typeof cs.time === 'number' && typeof cs.gasId === 'string';
+      });
+      d.customStops = cstops.length ? cstops : null;
+    } else {
+      d.customStops = null;
+    }
+    coerceState(d);
+    if (!hasVPM && d.algorithm === 'VPMB') d.algorithm = 'ZHL16C';
+    state = d;
+  }
+
+  // Upsert by name (newest wins), persist, refresh the list UI.
+  function saveDive(name) {
+    name = (name || '').trim();
+    if (!name) return false;
+    var list = loadDives();
+    var rec = { name: name, ts: Date.now(), dive: snapshotCurrentDive() };
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) { if (list[i].name === name) { idx = i; break; } }
+    if (idx >= 0) list[idx] = rec; else list.push(rec);
+    persistDives(list);
+    renderDives();
+    return true;
+  }
+  function deleteDive(name) {
+    var list = loadDives().filter(function (r) { return r.name !== name; });
+    persistDives(list);
+    renderDives();
+  }
+
+  function exportDives() {
+    var text = JSON.stringify(loadDives(), null, 2);
+    try {
+      var blob = new Blob([text], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'haldane-dives.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+    } catch (e) {
+      showBanner('EXPORT FAILED — ' + (e && e.message ? e.message : 'cannot write file'), true);
+    }
+  }
+  function importDives(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var incoming;
+      try { incoming = JSON.parse(reader.result); } catch (e) {
+        showBanner('IMPORT FAILED — not valid JSON', true);
+        return;
+      }
+      if (!Array.isArray(incoming)) {
+        showBanner('IMPORT FAILED — expected a list of saved dives', true);
+        return;
+      }
+      var valid = incoming.filter(function (r) {
+        return r && typeof r.name === 'string' && r.dive && typeof r.dive === 'object';
+      });
+      if (!valid.length) {
+        showBanner('IMPORT FAILED — no saved dives found in file', true);
+        return;
+      }
+      var list = loadDives();
+      valid.forEach(function (rec) {
+        var name = rec.name.trim();
+        if (!name) return;
+        var merged = { name: name, ts: (typeof rec.ts === 'number') ? rec.ts : Date.now(), dive: rec.dive };
+        var idx = -1;
+        for (var i = 0; i < list.length; i++) { if (list[i].name === name) { idx = i; break; } }
+        if (idx >= 0) list[idx] = merged; else list.push(merged);
+      });
+      persistDives(list);
+      renderDives();
+    };
+    reader.onerror = function () { showBanner('IMPORT FAILED — could not read file', true); };
+    reader.readAsText(file);
   }
 
   /* ----------------------------------------------------------
@@ -903,6 +1081,47 @@
     renderBadge();
     var rsv = $('gas-reserve');
     if (rsv) rsv.value = state.gasReserve;
+  }
+
+  function fmtSavedTs(ts) {
+    if (typeof ts !== 'number' || !isFinite(ts)) return '';
+    try {
+      var dt = new Date(ts);
+      var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      return dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()) +
+        ' ' + pad(dt.getHours()) + ':' + pad(dt.getMinutes());
+    } catch (e) { return ''; }
+  }
+
+  function renderDives() {
+    var list = $('dives-list');
+    if (!list) return;
+    clear(list);
+    var dives = loadDives().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
+    if (!dives.length) {
+      list.appendChild(mk('p', 'dives-empty', 'No saved dives yet.'));
+      return;
+    }
+    dives.forEach(function (rec) {
+      var row = mk('div', 'dive-item');
+      row.setAttribute('data-dive-name', rec.name);
+      var info = mk('div', 'dive-info');
+      info.appendChild(mk('span', 'dive-name', rec.name));
+      var ts = fmtSavedTs(rec.ts);
+      if (ts) info.appendChild(mk('span', 'dive-ts num', ts));
+      row.appendChild(info);
+      var load = mk('button', 'ghost-btn', 'LOAD');
+      load.type = 'button';
+      load.setAttribute('data-action', 'load');
+      row.appendChild(load);
+      var del = mk('button', 'icon-btn', '✕');
+      del.type = 'button';
+      del.title = 'Delete saved dive';
+      del.setAttribute('aria-label', 'Delete ' + rec.name);
+      del.setAttribute('data-action', 'delete');
+      row.appendChild(del);
+      list.appendChild(row);
+    });
   }
 
   /* ----------------------------------------------------------
@@ -1904,6 +2123,63 @@
     $('plan-btn').addEventListener('click', function () { runPlan(true); });
     $('copy-btn').addEventListener('click', copyPlan);
 
+    // --- saved dives
+    var saveBtn = $('dive-save-btn');
+    if (saveBtn) {
+      saveBtn.addEventListener('click', function () {
+        var nameInput = $('dive-name');
+        var name = nameInput ? nameInput.value : '';
+        if (saveDive(name)) {
+          if (nameInput) nameInput.value = '';
+          var orig = saveBtn.textContent;
+          saveBtn.textContent = 'SAVED ✓';
+          if (saveTimer) clearTimeout(saveTimer);
+          saveTimer = setTimeout(function () { saveBtn.textContent = orig; }, 1600);
+        }
+      });
+    }
+    var nameField = $('dive-name');
+    if (nameField) {
+      nameField.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); saveBtn && saveBtn.click(); }
+      });
+    }
+    var exportBtn = $('dives-export-btn');
+    if (exportBtn) exportBtn.addEventListener('click', exportDives);
+    var importBtn = $('dives-import-btn');
+    var importFile = $('dives-import-file');
+    if (importBtn && importFile) {
+      importBtn.addEventListener('click', function () { importFile.click(); });
+      importFile.addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        importDives(f);
+        importFile.value = ''; // allow re-importing the same file
+      });
+    }
+    var divesList = $('dives-list');
+    if (divesList) {
+      divesList.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('[data-action]') : null;
+        if (!btn) return;
+        var row = btn.closest('[data-dive-name]');
+        if (!row) return;
+        var name = row.getAttribute('data-dive-name');
+        var action = btn.getAttribute('data-action');
+        if (action === 'delete') {
+          deleteDive(name);
+        } else if (action === 'load') {
+          var rec = null, all = loadDives();
+          for (var i = 0; i < all.length; i++) { if (all[i].name === name) { rec = all[i]; break; } }
+          if (!rec) return;
+          applyDive(rec.dive);
+          renderRail();
+          saveState();
+          applyValidation();
+          runPlan(true);
+        }
+      });
+    }
+
     // re-render charts on resize (debounced) so they can refit
     var resizeTimer = null;
     window.addEventListener('resize', function () {
@@ -1922,6 +2198,7 @@
     detectModules(); // may coerce algorithm if VPM missing
     renderPresets();
     renderRail();
+    renderDives();
     bindEvents();
     var v = applyValidation();
     if (!v.errors.length) {
