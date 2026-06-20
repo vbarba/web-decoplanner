@@ -450,6 +450,12 @@ input[type="checkbox"]:checked::after {
   transition: background .15s ease, box-shadow .15s ease;
 }
 .ghost-btn:hover { background: rgba(53, 224, 194, .12); box-shadow: var(--glow); }
+.ghost-btn.active,
+.ghost-btn[aria-pressed="true"] {
+  background: rgba(53, 224, 194, .18);
+  border-color: var(--phosphor);
+  box-shadow: var(--glow);
+}
 
 .icon-btn {
   font-family: var(--font-mono);

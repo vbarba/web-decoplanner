@@ -95,11 +95,11 @@
       gasReserve: 'thirds',
       extraReserveBar: 40,   // fixed reserve added on top of every rule (bar)
       customStops: null,     // verify mode: [{depth,time,gasId}] or null (computed)
-      segments: [{ depth: 45, time: 25, gasId: 'tx2135' }],
+      showTravel: false,     // view-only: show ascent/descent travel legs in the table
+      segments: [{ depth: 45, time: 30, gasId: 'tx2135' }],
       gases: [
         { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom', cyl: 'd2x12', startBar: 232 },
-        { id: 'ean50',  fO2: 0.50, fHe: 0.00, type: 'deco',   cyl: 's80',  startBar: 207 },
-        { id: 'o2',     fO2: 1.00, fHe: 0.00, type: 'deco',   cyl: 'al40', startBar: 207 }
+        { id: 'ean50',  fO2: 0.50, fHe: 0.00, type: 'deco',   cyl: 's80',  startBar: 207 }
       ]
     };
   }
@@ -235,6 +235,7 @@
      'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar']
       .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
     if (typeof s.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = s.segmentTimesIncludeTravel;
+    if (typeof s.showTravel === 'boolean') d.showTravel = s.showTravel;
     if (Array.isArray(s.gases) && s.gases.length) {
       var gs = s.gases.filter(function (g) {
         return g && typeof g.id === 'string' &&
@@ -835,10 +836,18 @@
     $('set-extra-reserve').value = pressOut(state.extraReserveBar);
     $('set-extra-reserve').step = imperial() ? '50' : '5';
     $('set-incl-travel').checked = state.segmentTimesIncludeTravel;
+    syncTravelBtn();
     setSeg('laststop', state.lastStopDepth === 3 ? 'laststop-3' : 'laststop-6');
     setSeg('water', state.water === 'salt' ? 'water-salt' : 'water-fresh');
     $('laststop-3').textContent = imperial() ? '10 ft' : '3 m';
     $('laststop-6').textContent = imperial() ? '20 ft' : '6 m';
+  }
+
+  function syncTravelBtn() {
+    var b = $('travel-btn');
+    if (!b) return;
+    b.classList.toggle('active', !!state.showTravel);
+    b.setAttribute('aria-pressed', state.showTravel ? 'true' : 'false');
   }
 
   function setSeg(group, activeId) {
@@ -1100,7 +1109,11 @@
     var meta = resultGasMeta(result);
     clear(body);
     body.classList.remove('cascade');
-    (result.table || []).forEach(function (r, i) {
+    var rows = (result.table || []);
+    if (!state.showTravel) {
+      rows = rows.filter(function (r) { return r.phase !== 'asc' && r.phase !== 'desc'; });
+    }
+    rows.forEach(function (r, i) {
       body.appendChild(readOnlyRow(r, meta, i));
     });
     if (animate && !reduceMotion) body.classList.add('cascade');
@@ -1122,6 +1135,9 @@
       if (table[i].phase === 'stop' || table[i].phase === 'switch') { firstHeld = i; break; }
     }
     var head = firstHeld < 0 ? table.slice() : table.slice(0, firstHeld);
+    if (!state.showTravel) {
+      head = head.filter(function (r) { return r.phase !== 'asc' && r.phase !== 'desc'; });
+    }
     head.forEach(function (r, idx) {
       // skip ascent legs that land on the first custom stop (they are implied)
       body.appendChild(readOnlyRow(r, meta, idx));
@@ -1651,6 +1667,14 @@
         saveState();
         runPlan(false);                       // re-render in edit mode (verify)
       }
+    });
+
+    // TRAVEL toggles ascent/descent legs in the table (view-only, no recompute).
+    $('travel-btn').addEventListener('click', function () {
+      state.showTravel = !state.showTravel;
+      syncTravelBtn();
+      saveState();
+      if (lastGoodResult) renderTable(lastGoodResult, false);
     });
 
     // cell edits (depth/time/gas) — verify-replay on the existing debounce
