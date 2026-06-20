@@ -87,6 +87,7 @@
   function defaults() {
     return {
       units: 'metric',
+      lang: null,            // null = follow the browser; else a forced 2-letter code
       algorithm: 'ZHL16B',
       gfLow: 20, gfHigh: 85,
       vpmConservatism: 2,
@@ -115,6 +116,7 @@
      State
   ---------------------------------------------------------- */
   var state = defaults();
+  var hasI18n = typeof window !== 'undefined' && window.I18N && typeof window.I18N.t === 'function';
   var lastResult = null;       // last result from engine/mock (any ok)
   var lastGoodResult = null;   // last result with ok=true
   var hasPlanned = false;      // live recompute only after 1st success
@@ -239,6 +241,7 @@
     ['units', 'algorithm', 'water', 'gasReserve'].forEach(function (k) {
       if (typeof s[k] === 'string') d[k] = s[k];
     });
+    if (typeof s.lang === 'string' || s.lang === null) d.lang = s.lang;
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
      'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar']
       .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
@@ -1083,6 +1086,44 @@
     if (rsv) rsv.value = state.gasReserve;
   }
 
+  /* ----------------------------------------------------------
+     Internationalization (UI chrome + tooltips)
+  ---------------------------------------------------------- */
+  // Resolve the active language: an explicit saved choice, else the browser's.
+  function activeLang() {
+    if (!hasI18n) return 'en';
+    if (state.lang && window.I18N.has(state.lang)) return state.lang;
+    return window.I18N.detect();
+  }
+
+  // Translate every element carrying data-i18n / -title / -ph in place.
+  function applyI18n() {
+    if (!hasI18n) return;
+    window.I18N.setLang(activeLang());
+    var t = window.I18N.t;
+    var i, els;
+    els = document.querySelectorAll('[data-i18n]');
+    for (i = 0; i < els.length; i++) els[i].textContent = t(els[i].getAttribute('data-i18n'));
+    els = document.querySelectorAll('[data-i18n-title]');
+    for (i = 0; i < els.length; i++) els[i].setAttribute('title', t(els[i].getAttribute('data-i18n-title')));
+    els = document.querySelectorAll('[data-i18n-ph]');
+    for (i = 0; i < els.length; i++) els[i].setAttribute('placeholder', t(els[i].getAttribute('data-i18n-ph')));
+    document.documentElement.setAttribute('lang', window.I18N.getLang());
+  }
+
+  // Build the language <select> from the available dictionaries.
+  function renderLangSelect() {
+    var sel = $('lang-select');
+    if (!sel || !hasI18n) return;
+    clear(sel);
+    window.I18N.LANGS.forEach(function (code) {
+      var o = mk('option', null, window.I18N.LANG_LABELS[code] || code);
+      o.value = code;
+      sel.appendChild(o);
+    });
+    sel.value = activeLang();
+  }
+
   function fmtSavedTs(ts) {
     if (typeof ts !== 'number' || !isFinite(ts)) return '';
     try {
@@ -1192,6 +1233,7 @@
   function renderResults(result, animate) {
     if (!result) return;
     var resultsEl = $('results');
+    var chartsEl = document.querySelector('.charts-col');
     var errPanel = $('panel-errors');
 
     if (!result.ok) {
@@ -1207,11 +1249,13 @@
       errPanel.hidden = false;
       errPanel.classList.add('revealed');
       resultsEl.classList.add('stale');
+      if (chartsEl) chartsEl.classList.add('stale');
       return;
     }
 
     errPanel.hidden = true;
     resultsEl.classList.remove('stale');
+    if (chartsEl) chartsEl.classList.remove('stale');
 
     renderTiles(result, animate);
     renderTable(result, animate);
@@ -1277,21 +1321,87 @@
   }
 
   // Seed editable custom stops from a computed result: one row per held depth,
-  // merging switch + stop holds (gas = last gas held there, time = total hold).
-  // This reproduces the computed schedule faithfully when replayed.
+  // ordered deepest->shallowest. A gas SWITCH establishes the gas for its depth
+  // (and any shallower depths until the next switch); a STOP contributes hold
+  // time. This faithfully reproduces the computed schedule when replayed, and —
+  // crucially — keeps the gas attached to the depth where the switch happens
+  // (e.g. EAN50 from its 21 m switch), not to the next stop down.
   function seedCustomStopsFromResult(result) {
     var byDepth = [];
-    (result.table || []).forEach(function (x) {
-      if (x.phase !== 'switch' && x.phase !== 'stop') return;
-      var e = null;
+    function rowFor(depth, gasId) {
       for (var k = 0; k < byDepth.length; k++) {
-        if (Math.abs(byDepth[k].depth - x.startDepth) < 1e-6) { e = byDepth[k]; break; }
+        if (Math.abs(byDepth[k].depth - depth) < 1e-6) return byDepth[k];
       }
-      if (!e) { e = { depth: x.startDepth, time: 0, gasId: x.gasId }; byDepth.push(e); }
-      e.time += Math.round(x.duration);
-      e.gasId = x.gasId;
+      var e = { depth: depth, time: 0, gasId: gasId };
+      byDepth.push(e);
+      return e;
+    }
+    (result.table || []).forEach(function (x) {
+      if (x.phase === 'switch') {
+        // The switch row's gasId is the NEW gas; pin it to the switch depth and
+        // keep its hold time (the 1-min gas-switch stop) so the seeded schedule
+        // reproduces the computed runtime exactly.
+        var sw = rowFor(x.startDepth, x.gasId);
+        sw.gasId = x.gasId;
+        sw.time += Math.round(x.duration);
+      } else if (x.phase === 'stop') {
+        var e = rowFor(x.startDepth, x.gasId);
+        e.time += Math.round(x.duration);
+        // Only adopt the stop's gas if no switch already set one at this depth —
+        // a stop is breathed on whatever gas the switch (if any) selected.
+        if (!e.gasId) e.gasId = x.gasId;
+      }
     });
+    // Deepest first (engine + UI convention).
+    byDepth.sort(function (a, b) { return b.depth - a.depth; });
     return byDepth;
+  }
+
+  // Compute the engine's own safe deco schedule (generate mode) as editable
+  // stops, independent of the current customStops. Returns [] if no engine.
+  function computeSafeStops() {
+    var input = buildInput();
+    input.customStops = undefined;
+    var safe = null;
+    if (hasEngine && input.algorithm !== 'VPMB') {
+      try { safe = window.DecoEngine.plan(input); } catch (e) { safe = null; }
+    } else if (hasVPM && input.algorithm === 'VPMB') {
+      try { safe = window.VPMB.plan(input); } catch (e) { safe = null; }
+    }
+    if (!safe || !safe.ok) return [];
+    return seedCustomStopsFromResult(safe);
+  }
+
+  // Auto-fix an insufficient edited schedule: merge the engine's safe stops
+  // into the user's edits — add any missing stop depths and extend stops that
+  // are too short — without shortening anything the user deliberately lengthened.
+  // Returns a summary {added:[], extended:[]} of what changed (metric depths/min).
+  function fixDeco() {
+    var safe = computeSafeStops();
+    if (!safe.length) return null;
+    var cur = (state.customStops || []).map(function (cs) {
+      return { depth: cs.depth, time: cs.time, gasId: cs.gasId };
+    });
+    var added = [], extended = [];
+    safe.forEach(function (s) {
+      var match = null;
+      for (var i = 0; i < cur.length; i++) {
+        if (Math.abs(cur[i].depth - s.depth) < 1e-6) { match = cur[i]; break; }
+      }
+      if (!match) {
+        cur.push({ depth: s.depth, time: s.time, gasId: s.gasId });
+        added.push({ depth: s.depth, time: s.time });
+      } else if (s.time > match.time + 1e-6) {
+        extended.push({ depth: s.depth, from: match.time, to: s.time });
+        match.time = s.time;
+        if (!match.gasId) match.gasId = s.gasId;
+      }
+    });
+    cur.sort(function (a, b) { return b.depth - a.depth; });
+    state.customStops = cur;
+    saveState();
+    runPlan(false);
+    return { added: added, extended: extended };
   }
 
   function readOnlyRow(r, meta, idx) {
@@ -1488,6 +1598,37 @@
         verdict.hidden = true;
       }
     }
+
+    // FIX DECO action: offered only while editing an unsafe schedule.
+    var fixBtn = $('fix-deco-btn');
+    var unsafe = editing && result && result.verify && !result.verify.safe;
+    if (fixBtn) fixBtn.hidden = !unsafe;
+    // The "what changed" note is only meaningful in edit mode; hide it when we
+    // leave edit mode entirely (the user reset to computed).
+    var note = $('fix-note');
+    if (note && !editing) note.hidden = true;
+  }
+
+  // Render the "what FIX DECO changed" note (added stops / extended times).
+  function showFixNote(summary) {
+    var note = $('fix-note');
+    if (!note) return;
+    if (!summary || (!summary.added.length && !summary.extended.length)) {
+      note.hidden = true;
+      return;
+    }
+    var parts = [];
+    summary.added.forEach(function (a) {
+      parts.push('added ' + fmt(a.time, 0) + ' min @ ' + depthOut(a.depth) + ' ' + depthUnit());
+    });
+    summary.extended.forEach(function (e) {
+      parts.push('extended ' + depthOut(e.depth) + ' ' + depthUnit() +
+        ' to ' + fmt(e.to, 0) + ' min');
+    });
+    clear(note);
+    note.appendChild(mk('span', 'fix-note-glyph', '⚙'));
+    note.appendChild(mk('span', null, 'Auto-fixed: ' + parts.join(' · ') + '.'));
+    note.hidden = false;
   }
 
   /* Cross-gas context for the supply rules: the rock-bottom volume and which
@@ -1656,7 +1797,7 @@
   }
 
   function revealPanels() {
-    var panels = document.querySelectorAll('.results .reveal');
+    var panels = document.querySelectorAll('.results .reveal, .charts-col .reveal');
     var visible = [];
     var i;
     for (i = 0; i < panels.length; i++) {
@@ -1888,6 +2029,12 @@
       }
     });
 
+    // FIX DECO: auto-add / extend stops so the edited schedule clears the ceiling.
+    $('fix-deco-btn').addEventListener('click', function () {
+      var summary = fixDeco();
+      showFixNote(summary);
+    });
+
     // TRAVEL toggles ascent/descent legs in the table (view-only, no recompute).
     $('travel-btn').addEventListener('click', function () {
       state.showTravel = !state.showTravel;
@@ -2108,12 +2255,29 @@
       });
     });
 
+    // --- language
+    var langSel = $('lang-select');
+    if (langSel) {
+      langSel.addEventListener('change', function () {
+        state.lang = langSel.value;     // explicit choice overrides browser default
+        saveState();
+        // Re-render dynamic UI first, then translate so static chrome + any
+        // freshly-built labels both carry the new language.
+        renderRail();
+        renderDives();
+        if (lastGoodResult) renderResults(lastGoodResult, false);
+        applyI18n();
+      });
+    }
+
     // --- header / primary actions
     $('reset-btn').addEventListener('click', function () {
       try { localStorage.removeItem(LS_KEY); } catch (e) { /* ignore */ }
       var units = state.units; // resetting the plan shouldn't flip display units
+      var lang = state.lang;   // …nor the chosen language
       state = defaults();
       state.units = units;
+      state.lang = lang;
       if (!hasVPM && state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
       renderRail();
       saveState();
@@ -2196,9 +2360,11 @@
     buildRuler();
     loadState();
     detectModules(); // may coerce algorithm if VPM missing
+    renderLangSelect();
     renderPresets();
     renderRail();
     renderDives();
+    applyI18n();      // translate static chrome after the rail is built
     bindEvents();
     var v = applyValidation();
     if (!v.errors.length) {

@@ -14,6 +14,7 @@
   <script defer src="js/engine/zhl16.js"></script>
   <script defer src="js/engine/vpmb.js"></script>
   <script defer src="js/ui/charts.js"></script>
+  <script defer src="js/ui/i18n.js"></script>
   <script defer src="js/ui/app.js"></script>
 </head>
 <body>
@@ -28,14 +29,16 @@
       <span class="sonar" aria-hidden="true"><i class="sonar-dot"></i></span>
       <div class="brand-text">
         <span class="wordmark">HALDANE</span>
-        <span class="brand-sub">Decompression&nbsp;Planner</span>
+        <span class="brand-sub" data-i18n="brand.sub">Decompression&nbsp;Planner</span>
       </div>
     </div>
     <div class="topbar-tools">
-      <button type="button" class="link-btn" id="reset-btn" title="Restore default plan">RESET</button>
+      <label class="visually-hidden" for="lang-select" data-i18n="lang.label">Language</label>
+      <select id="lang-select" class="lang-select" aria-label="Language"></select>
+      <button type="button" class="link-btn" id="reset-btn" title="Restore default plan" data-i18n="topbar.reset">RESET</button>
       <div class="seg-control units-toggle" role="group" aria-label="Display units">
-        <button type="button" id="units-metric" data-units="metric" class="active" aria-pressed="true">METRIC</button>
-        <button type="button" id="units-imperial" data-units="imperial" aria-pressed="false">IMPERIAL</button>
+        <button type="button" id="units-metric" data-units="metric" class="active" aria-pressed="true" data-i18n="units.metric">METRIC</button>
+        <button type="button" id="units-imperial" data-units="imperial" aria-pressed="false" data-i18n="units.imperial">IMPERIAL</button>
       </div>
       <span class="algo-badge" id="algo-badge">ZHL-16B · GF 20/85</span>
     </div>
@@ -49,53 +52,53 @@
     <aside class="rail">
 
       <section class="panel" aria-labelledby="dive-title">
-        <h2 class="panel-title" id="dive-title">Dive</h2>
+        <h2 class="panel-title" id="dive-title" data-i18n="box.dive" data-i18n-title="tip.dive" title="The depth/time profile of your dive — each level is a depth held for a number of minutes on a chosen gas.">Dive</h2>
         <table class="seg-table">
           <thead>
             <tr>
-              <th scope="col">DEPTH <span class="unit u-depth">m</span></th>
-              <th scope="col">TIME <span class="unit">min</span></th>
-              <th scope="col">GAS</th>
-              <th scope="col"><span class="visually-hidden">Remove</span></th>
+              <th scope="col"><span data-i18n="col.depth">DEPTH</span> <span class="unit u-depth">m</span></th>
+              <th scope="col"><span data-i18n="col.time">TIME</span> <span class="unit">min</span></th>
+              <th scope="col" data-i18n="col.gas">GAS</th>
+              <th scope="col"><span class="visually-hidden" data-i18n="a11y.remove">Remove</span></th>
             </tr>
           </thead>
           <tbody id="segments-body"></tbody>
         </table>
-        <button type="button" class="ghost-btn" id="add-level-btn">+ ADD LEVEL</button>
+        <button type="button" class="ghost-btn" id="add-level-btn" data-i18n="btn.addLevel">+ ADD LEVEL</button>
       </section>
 
-      <details class="panel collapsible" id="panel-gases" open>
-        <summary><span class="panel-title">Gases</span><span class="summary-marker" aria-hidden="true"></span></summary>
+      <details class="panel collapsible" id="panel-gases">
+        <summary><span class="panel-title" data-i18n="box.gases" data-i18n-title="tip.gases" title="The breathing gases you carry: O₂/He mix, role (bottom or deco), cylinder and fill pressure. Deco gases switch in automatically at their MOD.">Gases</span><span class="summary-marker" aria-hidden="true"></span></summary>
         <div id="gases-list" class="gases-list"></div>
         <div class="add-gas-row">
-          <label class="visually-hidden" for="gas-preset">Gas preset</label>
+          <label class="visually-hidden" for="gas-preset" data-i18n="a11y.gasPreset">Gas preset</label>
           <select id="gas-preset"></select>
-          <button type="button" class="ghost-btn" id="add-gas-btn">+ ADD GAS</button>
+          <button type="button" class="ghost-btn" id="add-gas-btn" data-i18n="btn.addGas">+ ADD GAS</button>
         </div>
       </details>
 
-      <details class="panel collapsible" id="panel-algo" open>
-        <summary><span class="panel-title">Algorithm</span><span class="summary-marker" aria-hidden="true"></span></summary>
+      <details class="panel collapsible" id="panel-deco" open>
+        <summary><span class="panel-title" data-i18n="box.deco" data-i18n-title="tip.deco" title="Decompression model and environment: algorithm and gradient factors, ascent/descent rates, last stop depth, water type, surface pressure and max deco ppO₂.">Deco Settings</span><span class="summary-marker" aria-hidden="true"></span></summary>
         <div class="seg-control algo-toggle" role="group" aria-label="Decompression model">
-          <button type="button" id="algo-zhl" data-algo="ZHL16C" class="active" aria-pressed="true">B&Uuml;HLMANN&thinsp;+&thinsp;GF</button>
-          <button type="button" id="algo-vpm" data-algo="VPMB" aria-pressed="false">VPM-B</button>
+          <button type="button" id="algo-zhl" data-algo="ZHL16C" class="active" aria-pressed="true" data-i18n="algo.buhlmann">B&Uuml;HLMANN&thinsp;+&thinsp;GF</button>
+          <button type="button" id="algo-vpm" data-algo="VPMB" aria-pressed="false" data-i18n="algo.vpm">VPM-B</button>
         </div>
 
         <div id="zhl-controls" class="algo-body">
           <div class="zhl-variant-group">
-            <span class="field-label" id="zhl-variant-label">COEFFICIENTS</span>
+            <span class="field-label" id="zhl-variant-label" data-i18n="field.coefficients">COEFFICIENTS</span>
             <div class="seg-control mini zhl-variant-toggle" id="zhl-variant" role="group" aria-labelledby="zhl-variant-label">
               <button type="button" id="zhl-c" data-zhlvariant="ZHL16C" aria-pressed="false">ZHL-16C</button>
               <button type="button" id="zhl-b" data-zhlvariant="ZHL16B" class="active" aria-pressed="true">ZHL-16B</button>
             </div>
           </div>
           <div class="gf-row">
-            <label for="gf-low-num">GF&nbsp;LOW</label>
+            <label for="gf-low-num" data-i18n="field.gfLow">GF&nbsp;LOW</label>
             <input type="number" id="gf-low-num" class="num-input" data-vkey="gfLow" min="5" max="100" step="1" inputmode="numeric">
             <input type="range" id="gf-low-range" min="5" max="100" step="1" aria-label="Gradient factor low">
           </div>
           <div class="gf-row">
-            <label for="gf-high-num">GF&nbsp;HIGH</label>
+            <label for="gf-high-num" data-i18n="field.gfHigh">GF&nbsp;HIGH</label>
             <input type="number" id="gf-high-num" class="num-input" data-vkey="gfHigh" min="5" max="100" step="1" inputmode="numeric">
             <input type="range" id="gf-high-range" min="5" max="100" step="1" aria-label="Gradient factor high">
           </div>
@@ -103,7 +106,7 @@
 
         <div id="vpm-controls" class="algo-body" hidden>
           <div class="stepper-row">
-            <span class="field-label" id="vpm-label">CONSERVATISM</span>
+            <span class="field-label" id="vpm-label" data-i18n="field.conservatism">CONSERVATISM</span>
             <div class="stepper" role="group" aria-labelledby="vpm-label">
               <button type="button" id="vpm-minus" aria-label="Decrease conservatism">&minus;</button>
               <span class="stepper-value num" id="vpm-value">+2</span>
@@ -111,62 +114,72 @@
             </div>
           </div>
         </div>
-      </details>
 
-      <details class="panel collapsible" id="panel-settings">
-        <summary><span class="panel-title">Settings</span><span class="summary-marker" aria-hidden="true"></span></summary>
-        <div class="settings-grid">
-          <label for="set-descent">DESCENT <span class="unit u-rate">m/min</span></label>
+        <div class="settings-grid deco-grid">
+          <label for="set-descent"><span data-i18n="field.descent">DESCENT</span> <span class="unit u-rate">m/min</span></label>
           <input type="number" id="set-descent" class="num-input" data-vkey="descentRate" min="1" max="99" step="1" inputmode="decimal">
 
-          <label for="set-ascent">ASCENT <span class="unit u-rate">m/min</span></label>
+          <label for="set-ascent"><span data-i18n="field.ascent">ASCENT</span> <span class="unit u-rate">m/min</span></label>
           <input type="number" id="set-ascent" class="num-input" data-vkey="ascentRate" min="1" max="99" step="1" inputmode="decimal">
 
-          <span class="field-label" id="laststop-label">LAST STOP</span>
+          <span class="field-label" id="laststop-label" data-i18n="field.lastStop">LAST STOP</span>
           <div class="seg-control mini" role="group" aria-labelledby="laststop-label">
             <button type="button" id="laststop-3" data-laststop="3" aria-pressed="false">3 m</button>
             <button type="button" id="laststop-6" data-laststop="6" class="active" aria-pressed="true">6 m</button>
           </div>
 
-          <span class="field-label" id="water-label">WATER</span>
+          <span class="field-label" id="water-label" data-i18n="field.water">WATER</span>
           <div class="seg-control mini" role="group" aria-labelledby="water-label">
-            <button type="button" id="water-salt" data-water="salt" class="active" aria-pressed="true">SALT</button>
-            <button type="button" id="water-fresh" data-water="fresh" aria-pressed="false">FRESH</button>
+            <button type="button" id="water-salt" data-water="salt" class="active" aria-pressed="true" data-i18n="field.salt">SALT</button>
+            <button type="button" id="water-fresh" data-water="fresh" aria-pressed="false" data-i18n="field.fresh">FRESH</button>
           </div>
 
-          <label for="set-sp">SURFACE <span class="unit">bar</span></label>
+          <label for="set-sp"><span data-i18n="field.surface">SURFACE</span> <span class="unit">bar</span></label>
           <input type="number" id="set-sp" class="num-input" data-vkey="surfacePressure" min="0.5" max="1.2" step="0.001" inputmode="decimal">
 
-          <label for="set-ppo2">ppO&#8322; DECO <span class="unit">bar</span></label>
+          <label for="set-ppo2"><span data-i18n="field.ppo2deco">ppO&#8322; DECO</span> <span class="unit">bar</span></label>
           <input type="number" id="set-ppo2" class="num-input" data-vkey="ppO2MaxDeco" min="0.4" max="2" step="0.01" inputmode="decimal">
-
-          <label for="set-sac-bottom">SAC BOTTOM <span class="unit u-sac">L/min</span></label>
-          <input type="number" id="set-sac-bottom" class="num-input" data-vkey="sacBottom" min="1" max="99" step="0.1" inputmode="decimal">
-
-          <label for="set-sac-deco">SAC DECO <span class="unit u-sac">L/min</span></label>
-          <input type="number" id="set-sac-deco" class="num-input" data-vkey="sacDeco" min="1" max="99" step="0.1" inputmode="decimal">
-
-          <label for="set-extra-reserve">EXTRA RESERVE <span class="unit u-press">bar</span></label>
-          <input type="number" id="set-extra-reserve" class="num-input" data-vkey="extraReserveBar" min="0" step="5" inputmode="decimal">
 
           <label class="check-row" for="set-incl-travel">
             <input type="checkbox" id="set-incl-travel">
-            <span>LEVEL TIME INCLUDES TRAVEL</span>
+            <span data-i18n="field.inclTravel">LEVEL TIME INCLUDES TRAVEL</span>
           </label>
         </div>
       </details>
 
+      <details class="panel collapsible" id="panel-gasplan">
+        <summary><span class="panel-title" data-i18n="box.gasplan" data-i18n-title="tip.gasplan" title="Gas-supply planning: your breathing rate (SAC), reserve rule and a fixed extra reserve. These size your cylinders; they do not affect the deco schedule.">Gas Planning</span><span class="summary-marker" aria-hidden="true"></span></summary>
+        <div class="settings-grid">
+          <label for="set-sac-bottom"><span data-i18n="field.sacBottom">SAC BOTTOM</span> <span class="unit u-sac">L/min</span></label>
+          <input type="number" id="set-sac-bottom" class="num-input" data-vkey="sacBottom" min="1" max="99" step="0.1" inputmode="decimal">
+
+          <label for="set-sac-deco"><span data-i18n="field.sacDeco">SAC DECO</span> <span class="unit u-sac">L/min</span></label>
+          <input type="number" id="set-sac-deco" class="num-input" data-vkey="sacDeco" min="1" max="99" step="0.1" inputmode="decimal">
+
+          <label for="set-extra-reserve"><span data-i18n="field.extraReserve">EXTRA RESERVE</span> <span class="unit u-press">bar</span></label>
+          <input type="number" id="set-extra-reserve" class="num-input" data-vkey="extraReserveBar" min="0" step="5" inputmode="decimal">
+
+          <label for="gas-reserve" data-i18n="field.reserveRule">RESERVE RULE</label>
+          <select id="gas-reserve" aria-label="Gas reserve rule">
+            <option value="thirds" data-i18n="reserve.thirds">Rule of thirds</option>
+            <option value="half" data-i18n="reserve.half">Half + half</option>
+            <option value="mingas" selected data-i18n="reserve.mingas">Min gas (bottom&rarr;switch &times;2)</option>
+            <option value="none" data-i18n="reserve.none">No reserve</option>
+          </select>
+        </div>
+      </details>
+
       <details class="panel collapsible" id="panel-dives">
-        <summary><span class="panel-title">Saved Dives</span><span class="summary-marker" aria-hidden="true"></span></summary>
+        <summary><span class="panel-title" data-i18n="box.dives" data-i18n-title="tip.dives" title="Save the current dive (profile + settings) under a name, reload it later, or export/import your dives as a JSON file.">Saved Dives</span><span class="summary-marker" aria-hidden="true"></span></summary>
         <div class="dives-body">
           <div class="dives-save-row">
-            <input type="text" id="dive-name" placeholder="Name this dive" maxlength="60" autocomplete="off">
-            <button type="button" class="ghost-btn" id="dive-save-btn">SAVE</button>
+            <input type="text" id="dive-name" placeholder="Name this dive" data-i18n-ph="dives.namePlaceholder" maxlength="60" autocomplete="off">
+            <button type="button" class="ghost-btn" id="dive-save-btn" data-i18n="btn.save">SAVE</button>
           </div>
           <div class="dives-list" id="dives-list"></div>
           <div class="dives-io">
-            <button type="button" class="ghost-btn" id="dives-export-btn">EXPORT</button>
-            <button type="button" class="ghost-btn" id="dives-import-btn">IMPORT</button>
+            <button type="button" class="ghost-btn" id="dives-export-btn" data-i18n="btn.export">EXPORT</button>
+            <button type="button" class="ghost-btn" id="dives-import-btn" data-i18n="btn.import">IMPORT</button>
             <input type="file" id="dives-import-file" accept="application/json" hidden>
           </div>
         </div>
@@ -174,7 +187,7 @@
 
       <div class="plan-dock">
         <span class="plan-wrap" id="plan-wrap">
-          <button type="button" class="plan-btn" id="plan-btn">PLAN&nbsp;DIVE</button>
+          <button type="button" class="plan-btn" id="plan-btn" data-i18n="btn.planDive">PLAN&nbsp;DIVE</button>
         </span>
         <p class="plan-reason" id="plan-reason" hidden></p>
       </div>
@@ -186,44 +199,44 @@
 
       <section class="panel panel-alert reveal" id="panel-errors" hidden>
         <div class="panel-head">
-          <h2 class="panel-title alert">Plan rejected</h2>
+          <h2 class="panel-title alert" data-i18n="box.errors">Plan rejected</h2>
         </div>
         <ul class="error-list" id="errors-list"></ul>
       </section>
 
       <div class="tiles reveal" id="tiles">
         <div class="tile tile-big">
-          <span class="tile-label">RUNTIME</span>
+          <span class="tile-label" data-i18n="tile.runtime">RUNTIME</span>
           <span class="tile-value num" id="tile-runtime">&mdash;</span>
           <span class="tile-unit">MIN</span>
         </div>
         <div class="tile">
-          <span class="tile-label">DECO TIME</span>
+          <span class="tile-label" data-i18n="tile.decoTime">DECO TIME</span>
           <span class="tile-value num" id="tile-deco">&mdash;</span>
           <span class="tile-unit">MIN</span>
         </div>
         <div class="tile">
-          <span class="tile-label">FIRST STOP</span>
+          <span class="tile-label" data-i18n="tile.firstStop">FIRST STOP</span>
           <span class="tile-value num" id="tile-firststop">&mdash;</span>
           <span class="tile-unit u-depth-tile">m</span>
         </div>
         <div class="tile">
-          <span class="tile-label">CNS</span>
+          <span class="tile-label" data-i18n="tile.cns">CNS</span>
           <span class="tile-value num" id="tile-cns">&mdash;</span>
           <span class="tile-unit">%</span>
         </div>
         <div class="tile">
-          <span class="tile-label">OTU</span>
+          <span class="tile-label" data-i18n="tile.otu">OTU</span>
           <span class="tile-value num" id="tile-otu">&mdash;</span>
           <span class="tile-unit">&nbsp;</span>
         </div>
         <div class="tile">
-          <span class="tile-label">MAX END</span>
+          <span class="tile-label" data-i18n="tile.maxEnd">MAX END</span>
           <span class="tile-value num" id="tile-end">&mdash;</span>
           <span class="tile-unit u-depth-tile">m</span>
         </div>
         <div class="tile">
-          <span class="tile-label">MAX ppO&#8322;</span>
+          <span class="tile-label" data-i18n="tile.maxPpo2">MAX ppO&#8322;</span>
           <span class="tile-value num" id="tile-ppo2">&mdash;</span>
           <span class="tile-unit">BAR</span>
         </div>
@@ -231,22 +244,24 @@
 
       <section class="panel reveal" id="panel-table" aria-labelledby="table-title">
         <div class="panel-head">
-          <h2 class="panel-title" id="table-title">Runtime table</h2>
+          <h2 class="panel-title" id="table-title" data-i18n="box.table" data-i18n-title="tip.table" title="Minute-by-minute runtime: every level, gas switch and decompression stop, with running time and ppO₂.">Runtime table</h2>
           <span class="verify-verdict" id="verify-verdict" hidden></span>
           <div class="table-tools">
-            <button type="button" class="ghost-btn" id="travel-btn" aria-pressed="false" title="Show ascent/descent travel legs in the table">TRAVEL</button>
-            <button type="button" class="ghost-btn" id="edit-deco-btn" title="Edit deco stops and verify safety">EDIT DECO</button>
-            <button type="button" class="ghost-btn" id="copy-btn" title="Copy plan as text">COPY</button>
+            <button type="button" class="ghost-btn" id="travel-btn" aria-pressed="false" data-i18n="btn.travel" data-i18n-title="tip.travel" title="Show ascent/descent travel legs in the table">TRAVEL</button>
+            <button type="button" class="ghost-btn fix-btn" id="fix-deco-btn" data-i18n="btn.fixDeco" data-i18n-title="tip.fixDeco" title="Add the deco stops needed to clear the ceiling" hidden>FIX DECO</button>
+            <button type="button" class="ghost-btn" id="edit-deco-btn" data-i18n="btn.editDeco" data-i18n-title="tip.editDeco" title="Edit deco stops and verify safety">EDIT DECO</button>
+            <button type="button" class="ghost-btn" id="copy-btn" data-i18n="btn.copy" data-i18n-title="tip.copy" title="Copy plan as text">COPY</button>
           </div>
         </div>
+        <p class="fix-note" id="fix-note" hidden></p>
         <table class="runtime-table">
           <thead>
             <tr>
-              <th scope="col">DEPTH <span class="unit u-depth">m</span></th>
-              <th scope="col">DUR</th>
-              <th scope="col">RUN</th>
-              <th scope="col">GAS</th>
-              <th scope="col">ppO&#8322;</th>
+              <th scope="col"><span data-i18n="col.depth">DEPTH</span> <span class="unit u-depth">m</span></th>
+              <th scope="col" data-i18n="col.dur">DUR</th>
+              <th scope="col" data-i18n="col.run">RUN</th>
+              <th scope="col" data-i18n="col.gas">GAS</th>
+              <th scope="col" data-i18n="col.ppo2">ppO&#8322;</th>
             </tr>
           </thead>
           <tbody id="runtime-body"></tbody>
@@ -255,23 +270,14 @@
 
       <section class="panel reveal" id="panel-gas" aria-labelledby="gasreq-title">
         <div class="panel-head">
-          <h2 class="panel-title" id="gasreq-title">Gas requirements</h2>
-          <div class="reserve-pick">
-            <label for="gas-reserve">RESERVE</label>
-            <select id="gas-reserve" aria-label="Gas reserve rule">
-              <option value="thirds">Rule of thirds</option>
-              <option value="half">Half + half</option>
-              <option value="mingas" selected>Min gas (bottom→switch ×2)</option>
-              <option value="none">No reserve</option>
-            </select>
-          </div>
+          <h2 class="panel-title" id="gasreq-title" data-i18n="box.gasreq" data-i18n-title="tip.gasreq" title="How much of each gas the dive needs versus what your cylinders hold, including the reserve.">Gas requirements</h2>
         </div>
         <div id="gas-usage" class="gas-usage"></div>
       </section>
 
       <section class="panel reveal" id="panel-warnings" aria-labelledby="warn-title" hidden>
         <div class="panel-head">
-          <h2 class="panel-title amber" id="warn-title">Advisories</h2>
+          <h2 class="panel-title amber" id="warn-title" data-i18n="box.advisories">Advisories</h2>
         </div>
         <ul class="warn-list" id="warnings-list"></ul>
       </section>
@@ -283,14 +289,14 @@
 
       <section class="panel reveal" id="panel-profile" aria-labelledby="profile-title">
         <div class="panel-head">
-          <h2 class="panel-title" id="profile-title">Dive profile</h2>
+          <h2 class="panel-title" id="profile-title" data-i18n="box.profile" data-i18n-title="tip.profile" title="Depth-vs-time graph of the planned dive, including the ceiling you must stay below.">Dive profile</h2>
         </div>
         <div id="profile-chart" class="chart-host"></div>
       </section>
 
       <section class="panel reveal" id="panel-tissue" aria-labelledby="tissue-title">
         <div class="panel-head">
-          <h2 class="panel-title" id="tissue-title">Tissue loading</h2>
+          <h2 class="panel-title" id="tissue-title" data-i18n="box.tissue" data-i18n-title="tip.tissue" title="Inert-gas loading of the 16 tissue compartments at the end of the dive, relative to their limits.">Tissue loading</h2>
         </div>
         <div id="tissue-chart" class="chart-host"></div>
       </section>
@@ -300,7 +306,7 @@
 
   <footer class="foot">
     <span class="foot-line" id="status-line">HALDANE UI</span>
-    <span class="foot-line">INTERNAL MATH: METRIC &middot; msw / min / bar</span>
+    <span class="foot-line" data-i18n="foot.internalMath">INTERNAL MATH: METRIC &middot; msw / min / bar</span>
   </footer>
 
 </body>
