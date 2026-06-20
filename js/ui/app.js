@@ -92,8 +92,8 @@
       segmentTimesIncludeTravel: false,
       sacBottom: 20,
       sacDeco: 16,
-      gasReserve: 'thirds',
-      extraReserveBar: 40,   // fixed reserve added on top of every rule (bar)
+      gasReserve: 'mingas',
+      extraReserveBar: 0,    // fixed reserve added on top of every rule (bar)
       customStops: null,     // verify mode: [{depth,time,gasId}] or null (computed)
       showTravel: false,     // view-only: show ascent/descent travel legs in the table
       segments: [{ depth: 45, time: 30, gasId: 'tx2135' }],
