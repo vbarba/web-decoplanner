@@ -401,14 +401,28 @@ const ref = VPMB.plan(baseInput());
 // ---------------------------------------------------------------------------
 // VERIFY MODE (custom-stop replay)
 // ---------------------------------------------------------------------------
+// Mirror seedCustomStopsFromResult in js/ui/app.js: a switch pins its (new) gas
+// to the switch depth (the EAN50-placement fix), a stop adds hold time; rows are
+// ordered deepest-first.
 function seedCustomStops(result) {
   const byDepth = [];
+  function rowFor(depth, gasId) {
+    let e = byDepth.find(function (d) { return Math.abs(d.depth - depth) < 1e-6; });
+    if (!e) { e = { depth: depth, time: 0, gasId: gasId }; byDepth.push(e); }
+    return e;
+  }
   (result.table || []).forEach(function (x) {
-    if (x.phase !== 'switch' && x.phase !== 'stop') return;
-    let e = byDepth.find(function (d) { return Math.abs(d.depth - x.startDepth) < 1e-6; });
-    if (!e) { e = { depth: x.startDepth, time: 0, gasId: x.gasId }; byDepth.push(e); }
-    e.time += x.duration; e.gasId = x.gasId;
+    if (x.phase === 'switch') {
+      const sw = rowFor(x.startDepth, x.gasId);
+      sw.gasId = x.gasId;
+      sw.time += x.duration;
+    } else if (x.phase === 'stop') {
+      const e = rowFor(x.startDepth, x.gasId);
+      e.time += x.duration;
+      if (!e.gasId) e.gasId = x.gasId;
+    }
   });
+  byDepth.sort(function (a, b) { return b.depth - a.depth; });
   return byDepth;
 }
 

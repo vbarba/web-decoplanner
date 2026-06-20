@@ -528,17 +528,30 @@ const ref = DecoEngine.plan(baseInput());
 // VERIFY MODE (custom-stop replay)
 // ---------------------------------------------------------------------------
 
-// Seed custom stops from a computed plan exactly as the UI does: merge the
-// switch + stop holds at each depth into one editable row (gas = last gas held
-// there, time = total hold). This reproduces the computed schedule faithfully.
+// Seed custom stops from a computed plan exactly as the UI does
+// (seedCustomStopsFromResult in js/ui/app.js): one editable row per held depth,
+// deepest-first. A gas SWITCH pins its (new) gas to the switch depth; a STOP
+// contributes hold time. Keeping the gas attached to the switch depth — not the
+// next stop down — is the fix for the "EAN50 shows in the wrong place" bug.
 function seedCustomStops(result) {
   const byDepth = [];
+  function rowFor(depth, gasId) {
+    let e = byDepth.find(function (d) { return Math.abs(d.depth - depth) < 1e-6; });
+    if (!e) { e = { depth: depth, time: 0, gasId: gasId }; byDepth.push(e); }
+    return e;
+  }
   (result.table || []).forEach(function (x) {
-    if (x.phase !== 'switch' && x.phase !== 'stop') return;
-    let e = byDepth.find(function (d) { return Math.abs(d.depth - x.startDepth) < 1e-6; });
-    if (!e) { e = { depth: x.startDepth, time: 0, gasId: x.gasId }; byDepth.push(e); }
-    e.time += x.duration; e.gasId = x.gasId;
+    if (x.phase === 'switch') {
+      const sw = rowFor(x.startDepth, x.gasId);
+      sw.gasId = x.gasId;
+      sw.time += x.duration;
+    } else if (x.phase === 'stop') {
+      const e = rowFor(x.startDepth, x.gasId);
+      e.time += x.duration;
+      if (!e.gasId) e.gasId = x.gasId;
+    }
   });
+  byDepth.sort(function (a, b) { return b.depth - a.depth; });
   return byDepth;
 }
 
@@ -556,6 +569,23 @@ function seedCustomStops(result) {
     'exceed=' + (rt.verify && rt.verify.maxCeilingExceedance));
   check('verify round-trip runtime matches generate', Math.abs(rt.totalRuntime - gen.totalRuntime) < 0.6,
     'verify=' + rt.totalRuntime.toFixed(2) + ' generate=' + gen.totalRuntime.toFixed(2));
+
+  // 1b. Gas-placement regression ("EAN50 in the wrong place"): the seeded stops
+  //     must attach each switch gas to the depth where the computed plan switches
+  //     to it — EAN50 at its ~21 m switch, O2 at its ~6 m switch — not to the
+  //     next stop down. Derive the expected switch depths from the table itself.
+  const switchRows = gen.table.filter(function (r) { return r.phase === 'switch'; });
+  check('reference plan has at least one gas switch', switchRows.length >= 1, JSON.stringify(switchRows.map(function (r) { return [r.startDepth, r.gasId]; })));
+  const placementOk = switchRows.every(function (sw) {
+    const row = cs.find(function (s) { return Math.abs(s.depth - sw.startDepth) < 1e-6; });
+    return row && row.gasId === sw.gasId;
+  });
+  check('seeded stops pin each switch gas to its switch depth', placementOk,
+    JSON.stringify(cs.map(function (s) { return [s.depth, s.gasId]; })));
+  // Seed order is strictly deepest-first (engine + UI convention).
+  let seedDesc = true;
+  for (let k = 1; k < cs.length; k++) if (cs[k].depth > cs[k - 1].depth) seedDesc = false;
+  check('seeded stops ordered deepest-first', seedDesc, JSON.stringify(cs.map(function (s) { return s.depth; })));
 
   // 2. Unsafe: drop the shallowest (longest) stop's time to 1 min — well short
   //    of the obligation, so the ceiling is clearly violated near the surface.
