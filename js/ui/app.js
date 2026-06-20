@@ -80,7 +80,7 @@
   function defaults() {
     return {
       units: 'metric',
-      algorithm: 'ZHL16C',
+      algorithm: 'ZHL16B',
       gfLow: 20, gfHigh: 85,
       vpmConservatism: 2,
       surfacePressure: 1.013,
@@ -1562,7 +1562,7 @@
       vb.disabled = true;
       vb.title = 'VPM-B engine module not loaded';
       vb.setAttribute('aria-disabled', 'true');
-      if (state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
+      if (state.algorithm === 'VPMB') state.algorithm = 'ZHL16B';
     }
     if (!hasCharts) {
       $('panel-profile').hidden = true;
@@ -1767,7 +1767,7 @@
     // --- algorithm
     $('algo-zhl').addEventListener('click', function () {
       // Switch to Buhlmann; preserve the chosen B/C variant if already on it.
-      if (state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
+      if (state.algorithm === 'VPMB') state.algorithm = 'ZHL16B';
       renderAlgo(); onStateChanged();
     });
     $('algo-vpm').addEventListener('click', function () {
