@@ -64,18 +64,18 @@
         <button type="button" class="ghost-btn" id="add-level-btn">+ ADD LEVEL</button>
       </section>
 
-      <section class="panel" aria-labelledby="gases-title">
-        <h2 class="panel-title" id="gases-title">Gases</h2>
+      <details class="panel collapsible" id="panel-gases" open>
+        <summary><span class="panel-title">Gases</span><span class="summary-marker" aria-hidden="true"></span></summary>
         <div id="gases-list" class="gases-list"></div>
         <div class="add-gas-row">
           <label class="visually-hidden" for="gas-preset">Gas preset</label>
           <select id="gas-preset"></select>
           <button type="button" class="ghost-btn" id="add-gas-btn">+ ADD GAS</button>
         </div>
-      </section>
+      </details>
 
-      <section class="panel" aria-labelledby="algo-title">
-        <h2 class="panel-title" id="algo-title">Algorithm</h2>
+      <details class="panel collapsible" id="panel-algo" open>
+        <summary><span class="panel-title">Algorithm</span><span class="summary-marker" aria-hidden="true"></span></summary>
         <div class="seg-control algo-toggle" role="group" aria-label="Decompression model">
           <button type="button" id="algo-zhl" data-algo="ZHL16C" class="active" aria-pressed="true">B&Uuml;HLMANN&thinsp;+&thinsp;GF</button>
           <button type="button" id="algo-vpm" data-algo="VPMB" aria-pressed="false">VPM-B</button>
@@ -111,7 +111,7 @@
             </div>
           </div>
         </div>
-      </section>
+      </details>
 
       <details class="panel collapsible" id="panel-settings">
         <summary><span class="panel-title">Settings</span><span class="summary-marker" aria-hidden="true"></span></summary>
