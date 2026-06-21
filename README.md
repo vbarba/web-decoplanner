@@ -27,12 +27,10 @@ calls. It implements two decompression models side by side:
   common presets (Air, EAN32, EAN50, O₂, 21/35, 18/45, 15/55, 12/65, 10/70)
 - Full runtime table: descent, level, ascent, gas-switch, and stop rows with
   per-row ppO₂, plus one-click copy to clipboard
-- **Editable runtime table** — click EDIT DECO to change stop times, gases, and
-  depths, or add/remove stops, and the engine **replays your exact schedule**
-  and tells you whether it still clears the decompression ceiling (✓ / ✕ with
-  the exact exceedance). Edits are never silently "fixed"; RESET TO COMPUTED
-  restores the optimal generated plan. Changing the dive keeps your custom stops
-  and re-verifies them against the new profile.
+- **Live runtime table** — the minute-by-minute decompression schedule
+  regenerates automatically whenever you change any input, always showing the
+  schedule the active engine computes from your current profile, gases, and
+  settings
 - Dive profile chart (depth vs. runtime) with the live ceiling overlay and
   gas-switch markers; tissue-loading bar chart for all 16 compartments
   (N₂ + He stacked)

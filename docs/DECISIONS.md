@@ -3,6 +3,56 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## Removed Edit Deco (verify mode); runtime table always regenerates
+
+The editable runtime table and its engine "verify mode" were **removed** from
+both engines and the UI to simplify the model and the surface area. The runtime
+table is now always the active engine's freshly-generated schedule and re-plans
+on every settings change (read-only rows); there is no replay-my-exact-schedule
+capability and no `FIX DECO` button.
+
+Concretely this stripped, from the engines: `input.customStops`, the
+`replayCustomStops` / `replayCustomStopsVPM` paths, and the `result.verify`
+field; from the UI (`app.js`): the EDIT DECO / RESET TO COMPUTED / FIX DECO
+buttons, the verify-verdict chip, the editable runtime-table cells,
+`state.customStops`, `seedCustomStopsFromResult`, `computeSafeStops`, `fixDeco`,
+and `showFixNote`; plus the verify-mode unit tests, the verify-mode CSS, and the
+`editDeco`/`fixDeco` i18n keys. Saved-dive snapshots no longer carry
+`customStops` (shape is now `{name, ts, dive:{segments, gases, settings}}`).
+
+Rationale: "is MY exact schedule safe?" added a second, parallel code path
+(replay alongside generate) in both engines plus a stateful editable table in the
+UI, for a feature that overlaps with simply re-planning. Always showing the
+engine's computed schedule is simpler to reason about, keeps the two engines
+generate-only, and removes a whole class of seed/replay/anchor bugs. See
+[ARCHITECTURE.md](./ARCHITECTURE.md).
+
+## Two intentional engine differences kept (NDL semantics; intermediate rung)
+
+A correctness audit surfaced two places where ZHL-16 and VPM-B diverge. Both were
+reviewed, judged **not unsafe**, and **deliberately kept** rather than forced to
+match — matching either one would have changed pinned golden schedules and/or the
+displayed NDL for no real safety gain.
+
+1. **NDL semantics.** ZHL's `computeNdl` reports remaining no-deco minutes at the
+   *final (shallowest)* bottom-phase depth; VPM-B binary-searches added time on the
+   *deepest* segment until deco appears (the conventional controlling-depth NDL).
+   They agree closely on single-segment dives but diverge on multilevel no-deco
+   dives — e.g. `[30 m/8 min, 12 m/5 min]` air gives ZHL `ndl=81`, VPM `ndl=9`.
+2. **Already-clear intermediate rung.** ZHL **skips** a stop rung whose next-stop
+   ceiling is already clear on arrival (gas-efficient, V-Planner-like); VPM-B
+   **holds** at least `minStopTime` at every rung from the first stop down to
+   `lastStopDepth` (Baker-strict `DECOMPRESSION_STOP`). A 60 m/25 min trimix dive
+   holds a 1-min 21 m rung in VPM-B that ZHL omits. ZHL is only ever
+   equal-or-more-aggressive on a rung that is already clear, so neither is unsafe.
+
+Separately, **three smaller cross-engine differences WERE fixed** to align the
+engines (in `js/engine/vpmb.js`, with a parity test added to
+`tests/vpmb.test.js`): VPM-B `minStopTime` now **ceils** (was round) to match ZHL;
+VPM-B `ladderUp` rounds the ceiling up to an **absolute stop-interval multiple**
+then clamps to `lastStop` (matching ZHL); and VPM-B now **accepts a 0 m segment /
+0-min time** like ZHL.
+
 ## i18n covers UI chrome + tooltips only — engine output stays English
 
 Translations (en/es/fr/de/zh) live in a separate `js/ui/i18n.js`
@@ -16,59 +66,6 @@ browser (`I18N.detect()`); the manual choice persists in `state.lang` and, like
 `units`, is **excluded** from saved-dive snapshots (a display preference, not part
 of a dive). A parity test (`tests/i18n.test.js`) fails the build if any language
 is missing a key — so adding a UI string means adding it to all five dicts.
-
-## Deco-edit: pin the gas to its switch depth; offer FIX DECO over red-only
-
-Two related changes to the EDIT DECO (verify) flow:
-
-1. **Gas placement bug ("EAN50 in the wrong place").** Two causes, both fixed:
-   - *Seeding:* `seedCustomStopsFromResult` previously merged a depth's switch +
-     stop rows and kept the *last* gasId. It now seeds one row per held depth,
-     deepest-first, where a **gas SWITCH pins its new gas to the switch depth**
-     (and carries its 1-min switch hold) and a STOP only adds time.
-   - *Replay:* both engines' custom-stop replay switched gas **before** travelling
-     to the next stop, so the deepest deco gas was breathed from the bottom — the
-     dive-profile chart then drew the gas-switch diamond at the bottom depth
-     (EAN50 at 45 m, well past its MOD). `replayCustomStops` /
-     `replayCustomStopsVPM` now **travel on the current gas, then switch on
-     arrival** at the stop, matching the generate path; the chart marker lands at
-     the real switch depth.
-
-   - *GF / Boyle anchor:* both engines' replay anchored the GF slope (ZHL) /
-     Boyle reference (VPM-B) at the user's **deepest custom row**. When that row is
-     a gas-switch depth *above* the first real deco-ceiling depth (e.g. switch at
-     21 m while the first ceiling is at 27 m), anchoring at 21 m tilts the slope
-     steeper and makes the verify ceiling stricter than the schedule generate
-     emitted — so a just-generated plan read as "✕ CEILING −1.6 m @ 21 m" the
-     instant you pressed EDIT DECO. Both replays now anchor the SAME way generate
-     does: ZHL at `firstStopCandidate`, VPM-B at the shared `computeFirstStop`
-     (extracted from `simulateAscent`), allowing a genuinely deeper user stop to
-     push the anchor deeper. The ZHL round-trip of a generated plan now verifies
-     at exactly 0 m exceedance; VPM-B retains a small (≤2 m) gradient-staleness
-     margin inherent to its frozen-gradient replay (documented below).
-
-   A regression test in `tests/zhl16.test.js` asserts every switch gas lands on
-   its switch depth (the test helpers mirror the seeding), and the round-trip
-   tests assert a generated plan re-verifies as safe.
-
-   *VPM-B verify margin:* the replay's verify scan uses frozen start-of-ascent
-   gradients, so on the deepest ascent transition it can report a small (~1.5 m)
-   transient ceiling overage that the following stop resolves — even though the
-   schedule is byte-identical to generate, whose own profile clears the ceiling
-   exactly. The VPM round-trip test asserts the schedule is reproduced and that
-   residual exceedance stays within that documented gradient-staleness margin,
-   while a real (shortened-stop) violation sits far above it (~6 m). Previously
-   this margin was hidden because the replay switched gas early, adding spurious
-   offgassing on the long bottom ascent.
-
-2. **FIX DECO instead of only flagging red.** When an edited schedule violates the
-   ceiling, the row still goes red *and* a `FIX DECO` action appears. It runs the
-   engine in generate mode (`computeSafeStops`) and merges that safe schedule into
-   the user's edits — adding missing stops and extending too-short ones, never
-   shortening a stop the diver lengthened — then shows a "what changed" note. We
-   kept it as an explicit button (not silent auto-correct on every keystroke) so
-   the diver stays in control of their edits and can still *see* the gap; the
-   verdict chip and red row remain until they click.
 
 ## ZHL-16B offered as a coefficient sub-variant of Bühlmann
 
@@ -89,22 +86,6 @@ identical to C. Coefficients taken from the published Bühlmann B table (Baker,
 `core/deco.cpp`. **Pitfall, recorded so it isn't reintroduced:** the well-known
 `1.2599 / 0.5050` compartment-1 figure is ZHL-16*A*, **not** B — ZHL-16B's
 compartment 1 equals C's `1.1696 / 0.5578`. A regression test pins this.
-
-## Editable runtime table = engine "verify mode", not UI re-optimization
-
-The editable runtime table is backed by a **verify-exact** capability added to
-both engines (`input.customStops` → replay the schedule literally, report a
-`verify` verdict), *not* by the UI re-running the generator with constraints.
-Rationale: the user wants "is MY exact schedule safe?", like replaying a profile
-on a dive computer — edits must never be silently corrected. Verify mode is
-additive (gated on `customStops`; the generate path is byte-for-byte unchanged,
-so all golden tests stay green) and reuses each engine's bottom simulation +
-aggregation verbatim, swapping only the ascent. The UI seeds editable rows from
-the computed plan by merging switch + stop holds per depth (so a faithful
-round-trip reproduces the computed runtime exactly), and a custom schedule is
-**kept and re-verified** when the dive changes rather than cleared — the
-more useful "does my plan still hold up?" behavior. See
-[ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Native `<select>` over a custom listbox
 
@@ -167,7 +148,9 @@ the UI and charts are engine-agnostic. The schedule-shaping conventions (stop
 ladder, gas switching, CNS/OTU, gas usage, sampling) are deliberately duplicated
 in both engines rather than shared, to keep each engine self-contained and
 independently testable. The cost is that a convention change must be mirrored in
-both files — accepted on purpose.
+both files — accepted on purpose. Two conventions are intentionally *not* mirrored
+(NDL semantics and already-clear intermediate-rung handling) — see "Two
+intentional engine differences kept" above.
 
 ## Zero dependencies, no build step
 

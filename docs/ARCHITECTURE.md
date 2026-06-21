@@ -35,54 +35,29 @@ top of `js/engine/zhl16.js` — read it before touching either engine. Summary:
 (bar), `water` (`salt`/`fresh`), `descentRate`/`ascentRate`, `stopInterval`,
 `lastStopDepth` (3 or 6), `minStopTime`, `gasSwitchStopTime`, `ppO2MaxDeco`,
 `segmentTimesIncludeTravel`, `segments:[{depth,time,gasId}]`,
-`gases:[{id,fO2,fHe,type}]`, `sacBottom`/`sacDeco`, and optionally
-`customStops:[{depth,time,gasId}]` (verify mode — see below).
+`gases:[{id,fO2,fHe,type}]`, `sacBottom`/`sacDeco`. Each engine always *generates*
+its schedule from these inputs — there is no replay/verify path.
 
 **`result`:** `ok`, `errors[]`, `warnings[]`, `algorithm`, `params` (echo),
 `table[]` (every movement; `phase ∈ desc|level|asc|switch|stop`, with
 `startDepth/endDepth/duration/runtime/gasId/ppO2Start/ppO2End`), `stops[]`,
 `noDeco`, `ndl`, `firstStopDepth`, `totalRuntime`, `totalDecoTime`,
 `gasUsage[]` (surface-equivalent liters per gas), `oxygen:{cns,otu}`,
-`profile[]` (fine samples ≤0.5 min), `ceilingProfile[]`, `finalTissues[]` (16
-compartments; `gfSurfacePct` for ZHL, `null` for VPM), and `verify` (verify mode
-only, else `null`).
+`profile[]` (fine samples ≤0.5 min), `ceilingProfile[]`, and `finalTissues[]` (16
+compartments; `gfSurfacePct` for ZHL, `null` for VPM).
 
-**Verify mode (editable runtime table).** If `input.customStops` (ordered
-deepest→shallowest `[{depth,time,gasId}]`) is present, `plan()` *replays that
-exact deco schedule* instead of generating one — each row's gas is breathed
-travelling up to and held at that depth; the final ascent uses the last row's
-gas. No auto-switching, no re-optimization (verify-exact); off-grid/out-of-order
-depths are accepted and replayed. The generate path is untouched (it runs
-whenever `customStops` is absent). The result then carries
-`verify = { safe, maxCeilingExceedance (m above ceiling, 0 if clear),
-firstViolationDepth, firstViolationTime }` and a "ceiling" warning when unsafe.
-Both engines implement this additively (ZHL: `replayCustomStops`; VPM-B:
-`replayCustomStopsVPM`, which reuses the start-of-ascent gradients and skips the
-CVA loop). The UI seeds editable rows from a computed plan with
-`seedCustomStopsFromResult` in `app.js`: one row per held depth, deepest-first,
-where a **gas SWITCH pins its (new) gas to the switch depth** (e.g. EAN50 at its
-21 m switch, O₂ at its 6 m switch) and contributes its 1-min switch hold, and a
-STOP adds hold time. Pinning the gas to the switch depth — not the next stop
-down — is what keeps the deco gas in the right row when editing; the matching
-test helpers in `tests/zhl16.test.js` / `tests/vpmb.test.js` mirror this exactly
-and a regression test asserts the placement. The replay itself **travels on the
-current gas and switches on arrival** at each stop (not before ascending), so a
-deco gas is never breathed below its switch depth and the chart's gas-switch
-marker sits at the real switch depth — see DECISIONS.md. A custom schedule is
-**kept and re-verified** when dive inputs change (not auto-cleared), and RESET TO
-COMPUTED clears `customStops` back to the generated plan.
+**The runtime table always shows the engine's freshly-computed schedule.** There
+is no edit/verify mode: the table is read-only and `app.js` re-plans (regenerates
+the whole schedule) on every settings change, so what you see is always exactly
+what the active engine generates from the current inputs. (An earlier "EDIT DECO"
+verify flow — `input.customStops` replay + a `verify` verdict — was removed from
+both engines and the UI; see DECISIONS.md.)
 
-**FIX DECO (auto-add stops).** When an edited schedule is unsafe, instead of
-only flagging the offending row red the UI offers a `FIX DECO` action
-(`fixDeco()` in `app.js`). It runs the engine in generate mode
-(`computeSafeStops()`), then merges that safe schedule into the user's edits —
-**adding** any missing stop depths and **extending** stops that are too short,
-never shortening a stop the diver lengthened — and shows a "what changed" note
-(`showFixNote`). The red `row-violation` styling and verdict chip remain so the
-gap is still visible until fixed.
-
-**Both engines implement these behaviors identically — change one, mirror the
-other:** travel at descent/ascent rates; `segmentTimesIncludeTravel` deducts
+**Both engines share the same result shape and the same scheduling conventions
+for the canonical cases — change one, mirror the other** (with two documented,
+intentional exceptions: NDL semantics and already-clear intermediate-rung
+handling; see "Known engine differences" below and DECISIONS.md): travel at
+descent/ascent rates; `segmentTimesIncludeTravel` deducts
 travel-in time from a level; stops at `stopInterval` multiples with the
 shallowest = `lastStopDepth`; integer (ceil'd) stop minutes; deco-gas
 auto-switch at MOD on ascent (never to a leaner gas); CNS via the NOAA table
@@ -142,6 +117,28 @@ change a constant, update the citing comment AND the regression test.** Note the
 `VPMB.VERSION` string can lag the actual constants — trust the code; fix the
 string when you touch them.
 
+## Known engine differences (intentional)
+
+The two engines share the contract and agree on the canonical schedules, but two
+behaviors differ **on purpose** (reviewed in a correctness audit and kept by
+maintainer decision — see DECISIONS.md for the full rationale):
+
+- **NDL semantics.** ZHL's `computeNdl` returns the remaining no-deco minutes at
+  the *final (shallowest)* bottom-phase depth; VPM-B binary-searches added time on
+  the *deepest* segment until deco appears (the conventional controlling-depth
+  NDL). They agree closely on single-segment dives but diverge on multilevel
+  no-deco dives (e.g. `[30 m/8 min, 12 m/5 min]` air → ZHL `ndl=81`, VPM `ndl=9`).
+- **Already-clear intermediate rung.** ZHL **skips** a stop rung whose next-stop
+  ceiling is already clear on arrival (gas-efficient, V-Planner-like); VPM-B
+  **holds** at least `minStopTime` at every rung from the first stop down to
+  `lastStopDepth` (Baker-strict). So a 60 m/25 min trimix dive shows a 1-min 21 m
+  rung in VPM-B that ZHL omits. Neither is unsafe — ZHL is only ever
+  equal-or-more-aggressive on an already-clear rung.
+
+(Three smaller cross-engine conventions — `minStopTime` ceiling, ladder-up to an
+absolute stop-interval grid, and accepting a 0 m / 0-min segment — *were* aligned
+to ZHL and are covered by a parity test in `tests/vpmb.test.js`.)
+
 ## Charts (`js/ui/charts.js`)
 
 Pure SVG via DOM APIs. `Charts.renderProfile(el, result, {units})` and
@@ -195,7 +192,7 @@ Gases starts collapsed, the rest open. Each box title carries a `title` /
 ### Saved dives are UI-only too
 
 `localStorage['haldane-dives-v1']` holds named full-snapshot plans
-(`{name, ts, dive:{segments, gases, customStops, settings}}`), separate from the
+(`{name, ts, dive:{segments, gases, settings}}`), separate from the
 auto-saved current plan. `snapshotCurrentDive` / `applyDive` / `saveDive` /
 `deleteDive` / `exportDives` / `importDives` in `app.js` manage it; `applyDive`
 reuses the same defensive coercion as `loadState` (factored into `coerceState`).
