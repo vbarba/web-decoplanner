@@ -246,6 +246,7 @@
         <div class="panel-head">
           <h2 class="panel-title" id="table-title" data-i18n="box.table" data-i18n-title="tip.table" title="Minute-by-minute runtime: every level, gas switch and decompression stop, with running time and ppO₂. Regenerated automatically whenever you change a setting.">Runtime table</h2>
           <div class="table-tools">
+            <button type="button" class="ghost-btn" id="summary-btn" aria-pressed="false" aria-controls="panel-summary" data-i18n="btn.summary" data-i18n-title="tip.summary" title="Build a summarized stop table with ±3 m / ±1 min contingency rows">SUMMARY</button>
             <button type="button" class="ghost-btn" id="travel-btn" aria-pressed="false" data-i18n="btn.travel" data-i18n-title="tip.travel" title="Show ascent/descent travel legs in the table">TRAVEL</button>
             <button type="button" class="ghost-btn" id="copy-btn" data-i18n="btn.copy" data-i18n-title="tip.copy" title="Copy plan as text">COPY</button>
           </div>
@@ -262,6 +263,16 @@
           </thead>
           <tbody id="runtime-body"></tbody>
         </table>
+      </section>
+
+      <section class="panel reveal" id="panel-summary" aria-labelledby="summary-title" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title" id="summary-title" data-i18n="box.summary" data-i18n-title="tip.summary" title="Summarized stop ladder with contingency rows for ±3 m deeper/shallower and ±1 min longer/shorter than planned.">Summarized table</h2>
+          <div class="table-tools">
+            <button type="button" class="ghost-btn" id="summary-copy-btn" data-i18n="btn.copy" data-i18n-title="tip.copy" title="Copy plan as text">COPY</button>
+          </div>
+        </div>
+        <div id="summary-body"></div>
       </section>
 
       <section class="panel reveal" id="panel-gas" aria-labelledby="gasreq-title">

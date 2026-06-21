@@ -967,8 +967,76 @@ input[type="range"]::-moz-range-thumb {
   to   { opacity: 1; transform: none; }
 }
 
-/* runtime-table panel-head tools (TRAVEL / COPY) */
+/* runtime-table panel-head tools (SUMMARY / TRAVEL / COPY) */
 .table-tools { display: flex; align-items: center; gap: 8px; }
+
+/* =============================================================
+   SUMMARIZED / contingency table
+   ============================================================= */
+.summary-table { width: 100%; border-collapse: collapse; }
+.summary-table th {
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  color: var(--dim);
+  text-align: right;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.summary-table th.sum-col-variant { text-align: left; padding-left: 4px; }
+.summary-table td {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  text-align: right;
+  color: var(--ink);
+  border-bottom: 1px solid var(--hairline-soft);
+  vertical-align: top;
+}
+.summary-table td.sum-variant { text-align: left; padding-left: 4px; }
+.summary-table tbody tr:hover td { background: rgba(120, 180, 200, .04); }
+
+.sum-variant-name {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  color: var(--ink);
+}
+.sum-variant-prof {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* the planned dive: highlighted as the reference row */
+.sum-row-plan td { background: rgba(53, 224, 194, .05); }
+.sum-row-plan td:first-child { box-shadow: inset 2px 0 0 var(--phosphor-dim); }
+.sum-row-plan .sum-variant-name { color: var(--phosphor); }
+
+.sum-short {
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  white-space: normal;
+  line-height: 1.5;
+}
+.sum-long {
+  font-variant-numeric: tabular-nums;
+  color: var(--phosphor);
+  text-shadow: 0 0 6px rgba(53, 224, 194, .22);
+  white-space: nowrap;
+}
+.sum-err { text-align: left; color: var(--amber); font-style: italic; }
+
+.summary-legend {
+  margin: 12px 4px 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--dim);
+}
 
 /* =============================================================
    CHARTS

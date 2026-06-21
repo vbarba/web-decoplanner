@@ -122,7 +122,10 @@
   var gasSeq = 0;              // unique id counter for added gases
   var planTimer = null;
   var copyTimer = null;
+  var summaryCopyTimer = null;
   var saveTimer = null;
+  var summaryOpen = false;     // view-only: the summarized/contingency table is shown
+  var lastSummary = null;      // last built summary (for COPY)
   var hasEngine = false, hasVPM = false, hasCharts = false;
 
   var reduceMotion = false;
@@ -1215,6 +1218,7 @@
 
     renderTiles(result, animate);
     renderTable(result, animate);
+    refreshSummary();   // re-plan the contingency table if it is open
     renderGasUsage(result);
     renderWarnings(result, gasSupplyWarnings(result));
     renderCharts(result);
@@ -1592,6 +1596,256 @@
   }
 
   /* ----------------------------------------------------------
+     SUMMARIZED / contingency table
+     ----------------------------------------------------------
+     Collapses the active engine's minute-by-minute runtime into just the
+     stop ladder, and re-plans four contingency variants around the planned
+     dive: ±3 m deeper/shallower and ±1 min longer/shorter (the depth delta
+     applies to the deepest segment, the time delta to the bottom time). The
+     single longest stop is the "long stop"; the rest are "short stops".
+     Engine-only: it calls the same plan() the runtime table uses. */
+
+  function tr(key) {
+    return hasI18n ? window.I18N.t(key) : key;
+  }
+
+  // Index of the deepest segment in an input (the bottom phase).
+  function deepestSegIndex(input) {
+    var idx = 0, deep = -Infinity;
+    (input.segments || []).forEach(function (s, i) {
+      if (s.depth > deep) { deep = s.depth; idx = i; }
+    });
+    return idx;
+  }
+
+  // Plan a contingency variant: a deep copy of the current input with the
+  // deepest segment's depth and/or time nudged by the given deltas (metric;
+  // clamped to >= 1 m / >= 1 min). Returns the engine result, or null on fault.
+  function planVariant(input, dDepth, dTime) {
+    var v = JSON.parse(JSON.stringify(input));
+    var i = deepestSegIndex(v);
+    var seg = v.segments[i];
+    if (!seg) return null;
+    if (dDepth) seg.depth = Math.max(1, seg.depth + dDepth);
+    if (dTime) seg.time = Math.max(1, seg.time + dTime);
+    try {
+      if (v.algorithm === 'VPMB' && hasVPM) return window.VPMB.plan(v);
+      if (hasEngine) return window.DecoEngine.plan(v);
+      return buildMock(v);
+    } catch (e) {
+      return { ok: false, errors: ['Engine exception: ' + (e && e.message ? e.message : e)], warnings: [] };
+    }
+  }
+
+  // Collapse result.stops into { short:[{depth,time}], long:{depth,time}|null }.
+  // The single longest stop (ties broken by greater depth) is the long stop.
+  function summarizeStops(result) {
+    var stops = (result && result.stops ? result.stops : []).map(function (s) {
+      return { depth: s.depth, time: s.time };
+    });
+    if (!stops.length) return { short: [], long: null };
+    var li = 0;
+    for (var i = 1; i < stops.length; i++) {
+      if (stops[i].time > stops[li].time ||
+         (stops[i].time === stops[li].time && stops[i].depth > stops[li].depth)) li = i;
+    }
+    var long = stops[li];
+    var short = stops.filter(function (s, i2) { return i2 !== li; });
+    return { short: short, long: long };
+  }
+
+  // The five variants shown, in order: planned, then the four contingencies.
+  function summaryVariants() {
+    return [
+      { key: 'plan',  labelKey: 'sum.planned', dDepth: 0,  dTime: 0,  badge: '' },
+      { key: 'deep',  label: '+3 ' + depthUnit(), dDepth: 3,  dTime: 0 },
+      { key: 'shal',  label: '−3 ' + depthUnit(), dDepth: -3, dTime: 0 },
+      { key: 'long',  label: '+1 min',            dDepth: 0,  dTime: 1 },
+      { key: 'short', label: '−1 min',            dDepth: 0,  dTime: -1 }
+    ];
+  }
+
+  // Build every variant's result + stop summary. Returns rows for render/copy.
+  function buildSummaryRows() {
+    var base = buildInput();
+    var baseDeepIdx = deepestSegIndex(base);
+    return summaryVariants().map(function (vr) {
+      var res = (vr.dDepth || vr.dTime) ? planVariant(base, vr.dDepth, vr.dTime)
+                                        : runActive(base);
+      var seg = base.segments[baseDeepIdx] || { depth: 0, time: 0 };
+      var depthM = Math.max(1, seg.depth + (vr.dDepth || 0));
+      var timeM = Math.max(1, seg.time + (vr.dTime || 0));
+      return {
+        key: vr.key,
+        labelKey: vr.labelKey,
+        label: vr.label,
+        depthM: depthM,
+        timeM: timeM,
+        result: res,
+        summary: res && res.ok ? summarizeStops(res) : null
+      };
+    });
+  }
+
+  // Run the active engine on a freshly-built input (used for the planned row).
+  function runActive(input) {
+    try {
+      if (input.algorithm === 'VPMB' && hasVPM) return window.VPMB.plan(input);
+      if (hasEngine) return window.DecoEngine.plan(input);
+      return buildMock(input);
+    } catch (e) {
+      return { ok: false, errors: ['Engine exception: ' + (e && e.message ? e.message : e)], warnings: [] };
+    }
+  }
+
+  // "21·1  18·2  15·3" — grouped short-stop string (depth·minutes, display units).
+  function shortStopsText(short) {
+    if (!short || !short.length) return tr('sum.none');
+    return short.map(function (s) {
+      return depthOut(s.depth) + '·' + fmt(s.time, 0);
+    }).join('  ');
+  }
+  function longStopText(long) {
+    if (!long) return '—';
+    return depthOut(long.depth) + ' ' + depthUnit() + ' / ' + fmt(long.time, 0) + ' min';
+  }
+
+  function summaryVariantLabel(row) {
+    var name = row.labelKey ? tr(row.labelKey) : (row.label || row.key);
+    var prof = depthOut(row.depthM) + ' ' + depthUnit() + ' · ' + fmt(row.timeM, 0) + ' min';
+    return { name: name, prof: prof };
+  }
+
+  function renderSummaryTable(rows) {
+    var host = $('summary-body');
+    clear(host);
+
+    var table = mk('table', 'summary-table');
+    var thead = mk('thead');
+    var htr = mk('tr');
+    [tr('sum.variant'), tr('sum.shortStops'), tr('sum.longStop'), tr('sum.deco'), tr('sum.runtime')]
+      .forEach(function (h, i) {
+        var th = mk('th', null, h);
+        th.setAttribute('scope', 'col');
+        if (i === 0) th.className = 'sum-col-variant';
+        htr.appendChild(th);
+      });
+    thead.appendChild(htr);
+    table.appendChild(thead);
+
+    var tbody = mk('tbody');
+    rows.forEach(function (row) {
+      var tr2 = mk('tr', 'sum-row' + (row.key === 'plan' ? ' sum-row-plan' : ''));
+      var lab = summaryVariantLabel(row);
+
+      var tdV = mk('td', 'sum-variant');
+      tdV.appendChild(mk('span', 'sum-variant-name', lab.name));
+      tdV.appendChild(mk('span', 'sum-variant-prof', lab.prof));
+      tr2.appendChild(tdV);
+
+      if (!row.result || !row.result.ok) {
+        var tdErr = mk('td', 'sum-err');
+        tdErr.setAttribute('colspan', '4');
+        tdErr.textContent = row.result && row.result.errors && row.result.errors.length
+          ? row.result.errors[0] : 'Plan rejected';
+        tr2.appendChild(tdErr);
+        tbody.appendChild(tr2);
+        return;
+      }
+
+      var s = row.summary;
+      tr2.appendChild(mk('td', 'sum-short', shortStopsText(s.short)));
+      tr2.appendChild(mk('td', 'sum-long', longStopText(s.long)));
+      tr2.appendChild(mk('td', 'num', fmt(row.result.totalDecoTime, 0) + ' min'));
+      tr2.appendChild(mk('td', 'num', fmt(row.result.totalRuntime, 0) + ' min'));
+      tbody.appendChild(tr2);
+    });
+    table.appendChild(tbody);
+    host.appendChild(table);
+
+    host.appendChild(mk('p', 'summary-legend', tr('sum.legend')));
+  }
+
+  // (Re)build and render the summarized table from current settings.
+  function refreshSummary() {
+    if (!summaryOpen) return;
+    lastSummary = buildSummaryRows();
+    renderSummaryTable(lastSummary);
+  }
+
+  function syncSummaryBtn() {
+    var b = $('summary-btn');
+    if (!b) return;
+    b.classList.toggle('active', summaryOpen);
+    b.setAttribute('aria-pressed', summaryOpen ? 'true' : 'false');
+  }
+
+  function toggleSummary() {
+    summaryOpen = !summaryOpen;
+    var panel = $('panel-summary');
+    if (panel) {
+      panel.hidden = !summaryOpen;
+      // The panel starts hidden, so revealPanels() skips it; reveal it here
+      // when first shown (it carries .reveal → opacity:0 until .revealed).
+      if (summaryOpen) panel.classList.add('revealed');
+    }
+    syncSummaryBtn();
+    if (summaryOpen) refreshSummary();
+  }
+
+  // Monospace text version of the summarized table (for COPY).
+  function summaryText(rows) {
+    var du = depthUnit();
+    var lines = [];
+    lines.push('HALDANE — SUMMARIZED STOP TABLE');
+    var algoLine = state.algorithm === 'VPMB'
+      ? 'VPM-B +' + state.vpmConservatism
+      : (state.algorithm === 'ZHL16B' ? 'ZHL-16B+GF ' : 'ZHL-16C+GF ') + state.gfLow + '/' + state.gfHigh;
+    lines.push('MODEL ' + algoLine + '  UNITS ' + state.units.toUpperCase());
+    lines.push('');
+    lines.push(pad(tr('sum.variant'), 12, true) + pad('DEPTH/TIME', 18, true) +
+      pad(tr('sum.longStop'), 16, true) + pad(tr('sum.deco'), 9, true) + tr('sum.runtime'));
+    lines.push('---------------------------------------------------------------------');
+    rows.forEach(function (row) {
+      var lab = summaryVariantLabel(row);
+      if (!row.result || !row.result.ok) {
+        lines.push(pad(lab.name, 12, true) + pad(lab.prof, 18, true) + 'PLAN REJECTED');
+        return;
+      }
+      var s = row.summary;
+      lines.push(
+        pad(lab.name, 12, true) +
+        pad(lab.prof, 18, true) +
+        pad(longStopText(s.long), 16, true) +
+        pad(fmt(row.result.totalDecoTime, 0) + ' min', 9, true) +
+        fmt(row.result.totalRuntime, 0) + ' min');
+      lines.push('   ' + tr('sum.shortStops') + ': ' + shortStopsText(s.short));
+    });
+    lines.push('---------------------------------------------------------------------');
+    lines.push(tr('sum.legend'));
+    return lines.join('\n');
+  }
+
+  function copySummary() {
+    if (!lastSummary) return;
+    var text = summaryText(lastSummary);
+    function done(okFlag) {
+      var btn = $('summary-copy-btn');
+      if (!btn) return;
+      btn.textContent = okFlag ? 'COPIED ✓' : 'COPY FAILED';
+      if (summaryCopyTimer) clearTimeout(summaryCopyTimer);
+      summaryCopyTimer = setTimeout(function () {
+        btn.textContent = tr('btn.copy');
+      }, 1600);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  /* ----------------------------------------------------------
      Banner / external-module guards
   ---------------------------------------------------------- */
   function showBanner(msg, isAlert) {
@@ -1880,6 +2134,7 @@
         renderDives();
         if (lastGoodResult) renderResults(lastGoodResult, false);
         applyI18n();
+        refreshSummary();   // rebuild the summarized table in the new language
       });
     }
 
@@ -1899,6 +2154,10 @@
     });
     $('plan-btn').addEventListener('click', function () { runPlan(true); });
     $('copy-btn').addEventListener('click', copyPlan);
+
+    // SUMMARY toggles the summarized/contingency table (re-plans 5 variants).
+    $('summary-btn').addEventListener('click', toggleSummary);
+    $('summary-copy-btn').addEventListener('click', copySummary);
 
     // --- saved dives
     var saveBtn = $('dive-save-btn');
