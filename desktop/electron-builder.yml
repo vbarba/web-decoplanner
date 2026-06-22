@@ -28,6 +28,8 @@ linux:
     - deb
   icon: icons/icon.png
   category: Education
+  # The .deb (fpm) target requires a maintainer in "Name <email>" form.
+  maintainer: Victor Barba <victor.barba@pyros-security.com>
 
 win:
   target: nsis
