@@ -128,6 +128,12 @@
             <button type="button" id="laststop-6" data-laststop="6" class="active" aria-pressed="true">6 m</button>
           </div>
 
+          <span class="field-label" id="rounding-label" data-i18n="field.rounding" data-i18n-title="tipf.rounding" title="How each stop's time is rounded to whole minutes. CEIL (recommended) always rounds up — conservative. NEAREST rounds to the closest whole minute, matching DecoPlanner / V-Planner and trimming 0–2 min of total deco.">STOP ROUNDING</span>
+          <div class="seg-control mini" role="group" aria-labelledby="rounding-label">
+            <button type="button" id="rounding-ceil" data-rounding="ceil" class="active" aria-pressed="true" data-i18n="field.roundCeil">CEIL</button>
+            <button type="button" id="rounding-nearest" data-rounding="nearest" aria-pressed="false" data-i18n="field.roundNearest">NEAREST</button>
+          </div>
+
           <span class="field-label" id="water-label" data-i18n="field.water" data-i18n-title="tipf.water" title="Water type. Salt = 10 m/bar, fresh = 10.3 m/bar; changes the depth↔pressure conversion.">WATER</span>
           <div class="seg-control mini" role="group" aria-labelledby="water-label">
             <button type="button" id="water-salt" data-water="salt" class="active" aria-pressed="true" data-i18n="field.salt">SALT</button>

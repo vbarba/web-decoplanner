@@ -3,6 +3,51 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## Stop-time rounding mode (`stopRounding`: `ceil` vs `nearest`)
+
+A user reported HALDANE's total deco running **+0–2 min longer** than DecoPlanner
+(DP) on the same trimix profiles, and asked whether HALDANE rounds up more
+conservatively. It does — and that was the **only** source of the gap.
+
+Both engines compute each stop by loading tissues in **whole-minute increments**
+and returning the **first integer minute** at which the deco ceiling clears the
+next rung (`computeStopMinutes` in `zhl16.js`; the `holdMinute` loop in
+`vpmb.js`). That rounds every stop's true fractional requirement **up**, never
+down. Instrumenting the ZHL engine at 0.01-min resolution on three cells
+confirmed it — each stop's reported minutes are always ≥ the true fractional
+requirement:
+
+| Cell        | Σ integer stop-min | Σ true fractional | Round-up baked in |
+| ----------- | ------------------ | ----------------- | ----------------- |
+| 54 m / 30   | 40                 | 39.37             | +0.63             |
+| 60 m / 30   | 51                 | 48.08             | +2.92             |
+| 60 m / 60   | 136                | 129.32            | +6.68             |
+
+The visible total gap (+0–2 min) is smaller than the raw per-stop round-up
+because rounding a deep stop up off-gasses the diver slightly more, so the next
+rung needs a hair less — the round-up is partly "pre-paid" down the ladder. DP
+agrees on the physics; it just rounds each stop to the **nearest** whole minute
+(near-1-minute requirements like 1.29 min display as 1, not 2) instead of
+ceiling.
+
+**Decision:** keep ceil-to-whole-minute as the **default** (conservative, and
+consistent with the strict Baker `DECOMPRESSION_STOP` behavior documented below),
+and add a `stopRounding` input the UI exposes as a STOP ROUNDING toggle:
+
+- `'ceil'` (default) — round every stop **up**. Unchanged historical behavior.
+- `'nearest'` — round each stop's true requirement to the **nearest** whole
+  minute. Implemented by probing the half-minute mark on cloned tissues before
+  completing a minute: if the ceiling already clears at `mins + 0.5`, the true
+  requirement is in `(mins, mins+0.5]` and rounds **down** to `mins` (never below
+  `minStopTime`). It can only ever trim the final sub-minute when it is `< 0.5`;
+  it never rounds *past* ceil. This reproduces DP / V-Planner totals.
+
+`nearest` is **never longer** than `ceil` and the unspecified default equals
+`ceil` — both are regression-tested in `tests/zhl16.test.js` and
+`tests/vpmb.test.js`. The convention is **mirrored in both engines** per the
+shared-contract rule (CLAUDE.md). It is a display-rounding policy only; it does
+not change the underlying tissue model or the ceiling.
+
 ## ZHL-16 now holds every rung (strict Erik-Baker GF compliance)
 
 The ZHL-16 ascent loop previously **skipped** a deco rung whose next-stop ceiling
