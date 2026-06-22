@@ -9,6 +9,11 @@ directories:
   output: dist            # desktop/dist/ (gitignored)
   buildResources: icons
 
+# After the app bundle is assembled (before the dmg is built), ad-hoc sign it on
+# macOS. electron-builder@24 won't ad-hoc sign natively, and an UNsigned bundle is
+# reported as "damaged" on recent macOS — see scripts/afterpack-sign.js.
+afterPack: scripts/afterpack-sign.js
+
 # Ship only the runtime. build/app/** is produced by scripts/prepare.js BEFORE
 # electron-builder runs (it copies the web app and bundles fonts locally).
 files:
@@ -20,7 +25,11 @@ mac:
   target: dmg
   icon: icons/icon.icns
   category: public.app-category.education
-  identity: null          # UNSIGNED — no Apple Developer cert / notarization
+  # Don't let electron-builder sign (no Apple cert). The afterPack hook ad-hoc
+  # signs the assembled bundle so its Info.plist/resources are covered — without
+  # that, recent macOS reports the app as "damaged". Result is a normal
+  # "unidentified developer" app; users clear quarantine (see desktop/README.md).
+  identity: null
 
 linux:
   target:

@@ -76,12 +76,21 @@ toolchain. Re-run `npm run icons` only when the mark in `icon.svg` changes.
 ## Unsigned builds — what users will see
 
 These installers are **not code-signed or notarized** (signing requires paid
-developer certificates). On first launch users must bypass the OS gatekeeper
+developer certificates). The macOS build is **ad-hoc signed** (via the
+`afterPack` hook) so it is *not* flagged as "damaged"; it still shows the normal
+"unidentified developer" prompt. On first launch users bypass the OS gatekeeper
 once:
 
-- **macOS:** double-clicking shows *"HALDANE can't be opened because Apple
-  cannot check it for malicious software."* → **Right-click the app → Open →
-  Open.** (Only needed the first time.)
+- **macOS:** after dragging HALDANE to Applications, the first open may say
+  *"HALDANE can't be opened because Apple cannot check it…"* (or, if macOS still
+  flags the download quarantine, *"…is damaged…"*). Clear the quarantine flag,
+  then open:
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/HALDANE.app
+  open /Applications/HALDANE.app
+  ```
+  (Right-click → Open works on some macOS versions, but clearing the quarantine
+  attribute as above is the reliable method on macOS 15+.)
 - **Windows:** SmartScreen shows *"Windows protected your PC."* → click
   **More info → Run anyway.**
 - **Linux:** make the AppImage executable (`chmod +x HALDANE-*.AppImage`) and
