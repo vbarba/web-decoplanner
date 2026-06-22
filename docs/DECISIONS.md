@@ -3,6 +3,41 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## ZHL-16 now holds every rung (strict Erik-Baker GF compliance)
+
+The ZHL-16 ascent loop previously **skipped** a deco rung whose next-stop ceiling
+was already clear on arrival (a V-Planner / Subsurface optimization — gas-efficient,
+fewer rows). This was the engine's one deviation from Erik Baker's canonical GF
+algorithm and has been **reversed**: the loop now **holds ≥ `minStopTime` at every
+3 m rung** from the first stop down to `lastStopDepth`, mirroring Baker's reference
+`DECOMPRESSION_STOP` loop (which steps up one `Step_Size` at a time and computes a
+hold at each rung, emitting even a 1-min rung). See
+[implementation note](./BAKER-GF-COMPLIANCE.md).
+
+Rationale: the user's reference is the canonical Baker GF method, not the V-Planner
+family. The skip path also *dropped the first stop entirely* on some profiles — e.g.
+the decotengu reference (35 m / 40 min air, GF 30/85, ZH-L16B) starts at 18 m under
+Baker, but the skip loop began at 15 m, losing the 18 m rung. Holding every rung is
+never less safe than skipping (hold ⊇ skip), and recovers the correct first stop.
+
+What did **not** change (already Baker-compliant, verified and left alone): the
+first-stop placement (GF-low ceiling rounded **up** to the next-deeper 3 m rung,
+then a projected-ascent deepening — `firstStopCandidate`); the GF tolerance formula
+`Ptol = (P_comp − a·gf)/(gf/b + 1 − gf)` (algebraically identical to Baker's FORTRAN);
+stop-time round-up to whole `minStopTime`; per-stop time = hold excluding the ascent
+leg; and the GF slope anchored at the **first actual stop depth** (Baker's anchor,
+not Subsurface's ratcheting deepest-ceiling anchor).
+
+Concretely (`js/engine/zhl16.js`, ascent loop in `plan()`): the
+`if (ceilingDepth(...gfNext) > next) { … }` gate around the hold was removed so the
+hold is unconditional; `computeStopMinutes` already enforces `mins >= minStop`.
+Golden schedules in `tests/zhl16.test.js` were re-pinned (the reference 45/25 dive
+now stops at 18/15/12/9/6 instead of 12/9/6), and a Baker-GF compliance suite was
+added (tolerance-formula boundaries at GF=1 and GF=0, GF-high-dominates-NDL,
+hold-every-rung no-gap invariant, and the decotengu 18/15/12/9/6/3 reference). Note
+**`firstStopCandidate` is unchanged** — its iterative round-up + projected-ascent
+loop is exactly Baker's first-stop rule and must not be switched to a floor.
+
 ## Removed Edit Deco (verify mode); runtime table always regenerates
 
 The editable runtime table and its engine "verify mode" were **removed** from
@@ -27,24 +62,26 @@ engine's computed schedule is simpler to reason about, keeps the two engines
 generate-only, and removes a whole class of seed/replay/anchor bugs. See
 [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-## Two intentional engine differences kept (NDL semantics; intermediate rung)
+## One intentional engine difference kept (NDL semantics)
 
-A correctness audit surfaced two places where ZHL-16 and VPM-B diverge. Both were
+A correctness audit surfaced two places where ZHL-16 and VPM-B diverged. The
+intermediate-rung one was later **resolved** (see "ZHL-16 now holds every rung"
+above — ZHL now holds every rung like VPM-B and Baker). The remaining one was
 reviewed, judged **not unsafe**, and **deliberately kept** rather than forced to
-match — matching either one would have changed pinned golden schedules and/or the
-displayed NDL for no real safety gain.
+match — matching it would change the displayed NDL for no real safety gain.
 
 1. **NDL semantics.** ZHL's `computeNdl` reports remaining no-deco minutes at the
    *final (shallowest)* bottom-phase depth; VPM-B binary-searches added time on the
    *deepest* segment until deco appears (the conventional controlling-depth NDL).
    They agree closely on single-segment dives but diverge on multilevel no-deco
    dives — e.g. `[30 m/8 min, 12 m/5 min]` air gives ZHL `ndl=81`, VPM `ndl=9`.
-2. **Already-clear intermediate rung.** ZHL **skips** a stop rung whose next-stop
-   ceiling is already clear on arrival (gas-efficient, V-Planner-like); VPM-B
-   **holds** at least `minStopTime` at every rung from the first stop down to
-   `lastStopDepth` (Baker-strict `DECOMPRESSION_STOP`). A 60 m/25 min trimix dive
-   holds a 1-min 21 m rung in VPM-B that ZHL omits. ZHL is only ever
-   equal-or-more-aggressive on a rung that is already clear, so neither is unsafe.
+
+**(Resolved) Already-clear intermediate rung.** Both engines now **hold** ≥
+`minStopTime` at every 3 m rung from the first stop down to `lastStopDepth`
+(Baker-strict `DECOMPRESSION_STOP`); ZHL's former "skip already-clear rung" path was
+removed for strict Baker compliance. The engines still produce different first-stop
+*depths* on the same dive — they are different models (Bühlmann-GF round-up ceiling
+vs VPM-B critical-volume) — which is expected, not a bug.
 
 Separately, **three smaller cross-engine differences WERE fixed** to align the
 engines (in `js/engine/vpmb.js`, with a parity test added to

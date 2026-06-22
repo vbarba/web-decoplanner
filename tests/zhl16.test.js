@@ -439,18 +439,20 @@ const ref = DecoEngine.plan(baseInput());
 // EAN50 + O2, GF 50/80, last stop 6 m). Independently re-derived from the
 // engine's verified primitives during review; loose range checks alone would
 // let GF-ladder convention regressions (slope anchor, leave criterion) slip
-// through as a few extra minutes.
+// through as a few extra minutes. These reflect the strict-Baker hold-every-rung
+// ladder: every 3 m rung from the first stop (18 m) down to lastStop is visited
+// and held >= minStopTime (see docs/DECISIONS.md "ZHL-16 holds every rung").
 // ---------------------------------------------------------------------------
 (function () {
   const r = DecoEngine.plan(baseInput());
-  check('golden: reference stops exactly [12/2, 9/3, 6/12]',
-    r.ok && JSON.stringify(r.stops.map(s => [s.depth, s.time])) === '[[12,2],[9,3],[6,12]]',
+  check('golden: reference stops exactly [18/1, 15/1, 12/1, 9/2, 6/12]',
+    r.ok && JSON.stringify(r.stops.map(s => [s.depth, s.time])) === '[[18,1],[15,1],[12,1],[9,2],[6,12]]',
     JSON.stringify(r.stops.map(s => [s.depth, s.time])));
   check('golden: reference runtime 49.0', r.ok && Math.abs(r.totalRuntime - 49.0) < 0.05,
     'runtime=' + r.totalRuntime);
-  check('golden: reference deco time 19.33', r.ok && Math.abs(r.totalDecoTime - 19.333) < 0.05,
+  check('golden: reference deco time 20', r.ok && Math.abs(r.totalDecoTime - 20) < 0.05,
     'deco=' + r.totalDecoTime);
-  check('golden: reference first stop 12 m', r.ok && r.firstStopDepth === 12,
+  check('golden: reference first stop 18 m', r.ok && r.firstStopDepth === 18,
     'firstStop=' + r.firstStopDepth);
 })();
 
@@ -568,8 +570,8 @@ const ref = DecoEngine.plan(baseInput());
   check('ZHL16B schedule differs from ZHL16C on the reference dive',
     stops(b) !== stops(c) || b.totalDecoTime !== c.totalDecoTime);
   // Golden values (deterministic; read off a real run).
-  check('ZHL16C golden stops on reference dive', stops(c) === '[[12,2],[9,3],[6,12]]', stops(c));
-  check('ZHL16B golden stops on reference dive', stops(b) === '[[12,2],[9,3],[6,11]]', stops(b));
+  check('ZHL16C golden stops on reference dive', stops(c) === '[[18,1],[15,1],[12,1],[9,2],[6,12]]', stops(c));
+  check('ZHL16B golden stops on reference dive', stops(b) === '[[18,1],[15,1],[12,1],[9,2],[6,11]]', stops(b));
 
   // Default path: an input WITHOUT an algorithm field behaves exactly like
   // ZHL-16C (regression lock — the C default must stay byte-for-byte).
@@ -577,8 +579,90 @@ const ref = DecoEngine.plan(baseInput());
   delete noAlgo.algorithm;
   const r = DecoEngine.plan(noAlgo);
   check('absent algorithm defaults to ZHL16C behavior',
-    r.ok && r.algorithm === 'ZHL16C' && stops(r) === '[[12,2],[9,3],[6,12]]',
+    r.ok && r.algorithm === 'ZHL16C' && stops(r) === '[[18,1],[15,1],[12,1],[9,2],[6,12]]',
     r.algorithm + ' ' + stops(r));
+})();
+
+// ---------------------------------------------------------------------------
+// 14. Erik Baker GF compliance suite. Pins the engine to the canonical Baker
+//     gradient-factor algorithm (Baker, "Understanding M-values" / "Clearing Up
+//     The Confusion About Deep Stops"; FORTRAN reference; decotengu port).
+// ---------------------------------------------------------------------------
+(function () {
+  const I = DecoEngine._internal;
+
+  // (a) Tolerance-formula boundaries. Baker's GF-adjusted tolerance
+  //     Ptol = (P_comp - a*gf)/(gf/b + 1 - gf) must collapse to the plain
+  //     Buhlmann ceiling at GF=1 and forbid all overpressure at GF=0.
+  const ctx = I.makeCtxLite(1.013, 'salt');
+  const pn = new Array(16).fill(2.5), ph = new Array(16).fill(0);
+  let maxPtol = -Infinity, maxT = -Infinity;
+  for (let i = 0; i < 16; i++) {
+    const pt = pn[i] + ph[i];
+    const ptol = (pt - ctx.aN2[i]) * ctx.bN2[i];
+    if (ptol > maxPtol) maxPtol = ptol;
+    if (pt > maxT) maxT = pt;
+  }
+  const plain = Math.max(0, (maxPtol - ctx.sp) * ctx.mpb);
+  check('Baker GF=1 ceiling equals plain Buhlmann (pt-a)*b',
+    Math.abs(I.ceilingDepth(pn, ph, 1.0, ctx) - plain) < 1e-9);
+  check('Baker GF~0 ceiling forbids overpressure (= (pt-sp)*mpb)',
+    Math.abs(I.ceilingDepth(pn, ph, 1e-9, ctx) - (maxT - ctx.sp) * ctx.mpb) < 1e-6);
+
+  // (b) GF-high dominates the NDL (thetheoreticaldiver.org): air 20 m with
+  //     GF 100/100 and GF 20/100 give essentially the same NDL; lowering only
+  //     GF-low barely moves it. Read NDL by stepping bottom time until deco.
+  function ndlAt(gfLow, gfHigh) {
+    for (let t = 1; t < 300; t++) {
+      const r = DecoEngine.plan(baseInput({
+        algorithm: 'ZHL16C', gfLow: gfLow, gfHigh: gfHigh, lastStopDepth: 3,
+        segmentTimesIncludeTravel: false,
+        gases: [{ id: 'air', fO2: 0.21, fHe: 0, type: 'bottom' }],
+        segments: [{ depth: 20, time: t, gasId: 'air' }]
+      }));
+      if (!r.noDeco) return t - 1;
+    }
+    return 299;
+  }
+  const ndlHi = ndlAt(100, 100), ndlLo = ndlAt(20, 100);
+  check('GF-high dominates NDL (GF100/100 ~= GF20/100 air 20 m)',
+    ndlHi > 30 && ndlHi < 70 && Math.abs(ndlHi - ndlLo) <= 1,
+    'GF100/100=' + ndlHi + ' GF20/100=' + ndlLo);
+
+  // (c) Hold-every-rung invariant (Baker DECOMPRESSION_STOP visits every 3 m
+  //     rung from the first stop down to lastStop; the V-Planner/Subsurface
+  //     skip-clear-rung optimization is NOT used). The contiguous deco region
+  //     above lastStop must step down by exactly stopInterval with no gaps.
+  const ref = DecoEngine.plan(baseInput({ segmentTimesIncludeTravel: false }));
+  let contiguous = ref.stops.length >= 2;
+  for (let i = 1; i < ref.stops.length; i++) {
+    if (Math.abs((ref.stops[i - 1].depth - ref.stops[i].depth) - 3) > 1e-9) contiguous = false;
+  }
+  check('hold-every-rung: deco ladder visits every 3 m rung with no gaps',
+    contiguous, JSON.stringify(ref.stops.map(function (s) { return s.depth; })));
+  check('hold-every-rung: first stop = round-up GF-low ceiling (18 m on reference)',
+    ref.firstStopDepth === 18, 'firstStop=' + ref.firstStopDepth);
+
+  // (d) DecoTengu reference (decotengu, ZH-L16B): 35 m / 40 min air, GF 30/85,
+  //     last stop 3 m, ascent 10 m/min. Published ladder 18/15/12/9/6/3 with
+  //     stop minutes 1/1/4/6/10/22. Depths must match exactly; minutes within
+  //     +/-2 (ZHL-16B vs decotengu rounding / last-stop convention).
+  const dt = DecoEngine.plan(baseInput({
+    algorithm: 'ZHL16B', gfLow: 30, gfHigh: 85, descentRate: 20, ascentRate: 10,
+    lastStopDepth: 3, segmentTimesIncludeTravel: false,
+    gases: [{ id: 'air', fO2: 0.21, fHe: 0, type: 'bottom' }],
+    segments: [{ depth: 35, time: 40, gasId: 'air' }]
+  }));
+  const dtDepths = dt.stops.map(function (s) { return s.depth; }).join(',');
+  check('DecoTengu reference depth ladder 18,15,12,9,6,3',
+    dtDepths === '18,15,12,9,6,3', dtDepths);
+  const dtRef = { 18: 1, 15: 1, 12: 4, 9: 6, 6: 10, 3: 22 };
+  let minutesOk = true;
+  dt.stops.forEach(function (s) {
+    if (dtRef[s.depth] === undefined || Math.abs(s.time - dtRef[s.depth]) > 2) minutesOk = false;
+  });
+  check('DecoTengu reference stop minutes within +/-2 of 1/1/4/6/10/22',
+    minutesOk, JSON.stringify(dt.stops.map(function (s) { return [s.depth, s.time]; })));
 })();
 
 // ---------------------------------------------------------------------------

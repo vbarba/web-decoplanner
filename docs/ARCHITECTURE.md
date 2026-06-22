@@ -54,9 +54,9 @@ verify flow — `input.customStops` replay + a `verify` verdict — was removed 
 both engines and the UI; see DECISIONS.md.)
 
 **Both engines share the same result shape and the same scheduling conventions
-for the canonical cases — change one, mirror the other** (with two documented,
-intentional exceptions: NDL semantics and already-clear intermediate-rung
-handling; see "Known engine differences" below and DECISIONS.md): travel at
+for the canonical cases — change one, mirror the other** (with one documented,
+intentional exception: NDL semantics; see "Known engine differences" below and
+DECISIONS.md): travel at
 descent/ascent rates; `segmentTimesIncludeTravel` deducts
 travel-in time from a level; stops at `stopInterval` multiples with the
 shallowest = `lastStopDepth`; integer (ceil'd) stop minutes; deco-gas
@@ -119,8 +119,8 @@ string when you touch them.
 
 ## Known engine differences (intentional)
 
-The two engines share the contract and agree on the canonical schedules, but two
-behaviors differ **on purpose** (reviewed in a correctness audit and kept by
+The two engines share the contract and agree on the canonical schedules, but one
+behavior differs **on purpose** (reviewed in a correctness audit and kept by
 maintainer decision — see DECISIONS.md for the full rationale):
 
 - **NDL semantics.** ZHL's `computeNdl` returns the remaining no-deco minutes at
@@ -128,12 +128,14 @@ maintainer decision — see DECISIONS.md for the full rationale):
   the *deepest* segment until deco appears (the conventional controlling-depth
   NDL). They agree closely on single-segment dives but diverge on multilevel
   no-deco dives (e.g. `[30 m/8 min, 12 m/5 min]` air → ZHL `ndl=81`, VPM `ndl=9`).
-- **Already-clear intermediate rung.** ZHL **skips** a stop rung whose next-stop
-  ceiling is already clear on arrival (gas-efficient, V-Planner-like); VPM-B
-  **holds** at least `minStopTime` at every rung from the first stop down to
-  `lastStopDepth` (Baker-strict). So a 60 m/25 min trimix dive shows a 1-min 21 m
-  rung in VPM-B that ZHL omits. Neither is unsafe — ZHL is only ever
-  equal-or-more-aggressive on an already-clear rung.
+
+A second former difference — **already-clear intermediate rung** — was **resolved**:
+both engines now **hold** ≥ `minStopTime` at every 3 m rung from the first stop down
+to `lastStopDepth` (Baker-strict `DECOMPRESSION_STOP`). ZHL's earlier V-Planner-style
+"skip already-clear rung" path was removed for strict Erik-Baker GF compliance — see
+[BAKER-GF-COMPLIANCE.md](./BAKER-GF-COMPLIANCE.md). The engines may still place the
+*first stop* at different depths because they are different models (Bühlmann-GF
+round-up ceiling vs VPM-B critical-volume), which is expected.
 
 (Three smaller cross-engine conventions — `minStopTime` ceiling, ladder-up to an
 absolute stop-interval grid, and accepting a 0 m / 0-min segment — *were* aligned

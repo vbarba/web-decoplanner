@@ -570,16 +570,21 @@
         const arrivalRt = sim.runtime;
         const swg = bestSwitchGas(ctx, sim.depth, ctx.gases[sim.gasId]);
         if (swg) switchTo(sim, swg.id, ctx.switchHold);
+        // Erik Baker's reference DECOMPRESSION_STOP loop HOLDS at every 3 m rung
+        // from the first stop down to lastStop, computing the time needed to
+        // clear the next rung. A rung whose next-depth ceiling is already clear
+        // still gets the minimum stop time (computeStopMinutes enforces
+        // mins >= minStop), not skipped. (The V-Planner/Subsurface optimization
+        // of skipping already-clear rungs was the engine's one deviation from
+        // strict Baker; removed for compliance. See docs/DECISIONS.md.)
         const gfNext = gfAt(next, sim.anchor, ctx);
-        if (ceilingDepth(sim.pn, sim.ph, gfNext, ctx) > next + EPS) {
-          const mins = computeStopMinutes(sim, gfNext, next);
-          if (mins === null) {
-            return emptyResult(params, ['deco stop at ' + s + ' m does not clear within 999 minutes'], warnings, algoOut);
-          }
-          holdAt(sim, 'stop', mins);
-          sim.stops.push({ depth: s, time: mins, runtime: sim.runtime, gasId: sim.gasId });
-          if (decoStartRt === null) decoStartRt = arrivalRt;
+        const mins = computeStopMinutes(sim, gfNext, next);
+        if (mins === null) {
+          return emptyResult(params, ['deco stop at ' + s + ' m does not clear within 999 minutes'], warnings, algoOut);
         }
+        holdAt(sim, 'stop', mins);
+        sim.stops.push({ depth: s, time: mins, runtime: sim.runtime, gasId: sim.gasId });
+        if (decoStartRt === null) decoStartRt = arrivalRt;
         ascendWithSwitches(sim, next);
         s = next;
       }
