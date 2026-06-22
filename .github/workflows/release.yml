@@ -168,11 +168,16 @@ jobs:
 
       - name: Build installer (prepare.js copies app + fetches fonts, then electron-builder)
         working-directory: desktop
+        shell: bash
         env:
           # Keep the macOS build UNSIGNED (no Apple cert / notarization).
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build
+          # NOTE: deliberately NO GH_TOKEN here. With a token + CI detected,
+          # electron-builder tries to auto-publish (and fails wanting a repo).
+          # We only BUILD here; the next step uploads via `gh release upload`.
+        run: |
+          npm run prepare:app
+          npx electron-builder --publish never
 
       - name: Upload installers to the Release
         env:
