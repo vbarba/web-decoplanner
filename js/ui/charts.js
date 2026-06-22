@@ -20,7 +20,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.0.1';
   var SVG_NS = 'http://www.w3.org/2000/svg';
 
   // ---- visual language (must match the app shell) -------------------------
