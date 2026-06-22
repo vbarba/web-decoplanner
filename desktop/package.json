@@ -5,6 +5,7 @@
   "description": "Desktop packaging for the HALDANE decompression planner (isolated tooling).",
   "author": "Victor Barba",
   "license": "MIT",
+  "homepage": "https://github.com/vbarba/web-decoplanner",
   "repository": "https://github.com/vbarba/web-decoplanner",
   "main": "main.js",
   "scripts": {
