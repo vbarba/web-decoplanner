@@ -18,7 +18,7 @@
   // units (a display preference, not part of the dive) and the profile arrays
   // (segments/gases, stored alongside as their own fields).
   var SETTINGS_FIELDS = ['algorithm', 'gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure',
-    'water', 'descentRate', 'ascentRate', 'lastStopDepth', 'stopRounding', 'ppO2MaxDeco',
+    'water', 'descentRate', 'ascentRate', 'lastStopDepth', 'ppO2MaxDeco',
     'segmentTimesIncludeTravel', 'sacBottom', 'sacDeco', 'gasReserve', 'extraReserveBar', 'showTravel'];
   var M2FT = 3.28084;
   var L_PER_CUFT = 28.3168;
@@ -96,7 +96,6 @@
       descentRate: 18,
       ascentRate: 9,
       lastStopDepth: 6,
-      stopRounding: 'ceil',  // 'ceil' (conservative, round stops UP to whole min) | 'nearest' (match DecoPlanner)
       ppO2MaxDeco: 1.61,
       segmentTimesIncludeTravel: true,
       sacBottom: 20,
@@ -243,7 +242,7 @@
     try { s = JSON.parse(raw); } catch (e) { return; }
     if (!s || typeof s !== 'object') return;
     var d = defaults();
-    ['units', 'algorithm', 'water', 'gasReserve', 'stopRounding'].forEach(function (k) {
+    ['units', 'algorithm', 'water', 'gasReserve'].forEach(function (k) {
       if (typeof s[k] === 'string') d[k] = s[k];
     });
     if (typeof s.lang === 'string' || s.lang === null) d.lang = s.lang;
@@ -290,7 +289,6 @@
     if (s.algorithm !== 'ZHL16C' && s.algorithm !== 'ZHL16B' && s.algorithm !== 'VPMB') s.algorithm = 'ZHL16C';
     if (s.water !== 'salt' && s.water !== 'fresh') s.water = 'salt';
     if (s.lastStopDepth !== 3 && s.lastStopDepth !== 6) s.lastStopDepth = 6;
-    if (s.stopRounding !== 'ceil' && s.stopRounding !== 'nearest') s.stopRounding = 'ceil';
     if (!RESERVE_RULES[s.gasReserve]) s.gasReserve = 'thirds';
     if (Array.isArray(s.gases)) {
       s.gases.forEach(function (g) {
@@ -343,7 +341,7 @@
     var d = defaults();
     d.units = state.units;
     var src = dive.settings || {};
-    ['algorithm', 'water', 'gasReserve', 'stopRounding'].forEach(function (k) {
+    ['algorithm', 'water', 'gasReserve'].forEach(function (k) {
       if (typeof src[k] === 'string') d[k] = src[k];
     });
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
@@ -461,7 +459,6 @@
       stopInterval: STOP_INTERVAL,
       lastStopDepth: state.lastStopDepth,
       minStopTime: MIN_STOP_TIME,
-      stopRounding: state.stopRounding,
       gasSwitchStopTime: GAS_SWITCH_STOP_TIME,
       ppO2MaxDeco: state.ppO2MaxDeco,
       segmentTimesIncludeTravel: state.segmentTimesIncludeTravel,
@@ -984,7 +981,6 @@
     $('set-incl-travel').checked = state.segmentTimesIncludeTravel;
     syncTravelBtn();
     setSeg('laststop', state.lastStopDepth === 3 ? 'laststop-3' : 'laststop-6');
-    setSeg('rounding', state.stopRounding === 'nearest' ? 'rounding-nearest' : 'rounding-ceil');
     setSeg('water', state.water === 'salt' ? 'water-salt' : 'water-fresh');
     $('laststop-3').textContent = imperial() ? '10 ft' : '3 m';
     $('laststop-6').textContent = imperial() ? '20 ft' : '6 m';
@@ -999,7 +995,6 @@
 
   function setSeg(group, activeId) {
     var ids = group === 'laststop' ? ['laststop-3', 'laststop-6']
-            : group === 'rounding' ? ['rounding-ceil', 'rounding-nearest']
             : group === 'water' ? ['water-salt', 'water-fresh']
             : group === 'zhlvariant' ? ['zhl-c', 'zhl-b']
             : ['units-metric', 'units-imperial'];
@@ -2161,13 +2156,6 @@
       $(pair[0]).addEventListener('click', function () {
         state.lastStopDepth = pair[1];
         setSeg('laststop', pair[0]);
-        onStateChanged();
-      });
-    });
-    [['rounding-ceil', 'ceil'], ['rounding-nearest', 'nearest']].forEach(function (pair) {
-      $(pair[0]).addEventListener('click', function () {
-        state.stopRounding = pair[1];
-        setSeg('rounding', pair[0]);
         onStateChanged();
       });
     });

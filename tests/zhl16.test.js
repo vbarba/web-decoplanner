@@ -666,40 +666,5 @@ const ref = DecoEngine.plan(baseInput());
 })();
 
 // ---------------------------------------------------------------------------
-// stopRounding: 'nearest' must never be longer than 'ceil', and on a deep
-// trimix dive it trims a measurable amount of total deco (matches DecoPlanner /
-// V-Planner rounding — see docs/DECISIONS.md "Stop-time rounding mode").
-// ---------------------------------------------------------------------------
-(function () {
-  const deep = { gfLow: 50, gfHigh: 80, lastStopDepth: 6,
-    segments: [{ depth: 60, time: 30, gasId: 'tx2135' }] };
-  const ceil = DecoEngine.plan(baseInput(Object.assign({ stopRounding: 'ceil' }, deep)));
-  const near = DecoEngine.plan(baseInput(Object.assign({ stopRounding: 'nearest' }, deep)));
-  check('stopRounding: both modes plan ok', ceil.ok && near.ok,
-    JSON.stringify(ceil.errors) + ' / ' + JSON.stringify(near.errors));
-  check('stopRounding: nearest total deco <= ceil total deco',
-    near.totalDecoTime <= ceil.totalDecoTime + 1e-6,
-    'ceil=' + ceil.totalDecoTime.toFixed(2) + ' nearest=' + near.totalDecoTime.toFixed(2));
-  check('stopRounding: nearest trims deco on the 60 m / 30 min trimix dive',
-    near.totalDecoTime < ceil.totalDecoTime - 1e-6,
-    'ceil=' + ceil.totalDecoTime.toFixed(2) + ' nearest=' + near.totalDecoTime.toFixed(2));
-  // Default (unspecified) must equal explicit 'ceil' — the conservative default.
-  const def = DecoEngine.plan(baseInput(deep));
-  check('stopRounding: default equals ceil (conservative default preserved)',
-    Math.abs(def.totalDecoTime - ceil.totalDecoTime) < 1e-6,
-    'default=' + def.totalDecoTime.toFixed(2) + ' ceil=' + ceil.totalDecoTime.toFixed(2));
-  // Every nearest stop is at most its ceil counterpart and >= minStopTime.
-  const byDepth = {};
-  ceil.stops.forEach(function (s) { byDepth[s.depth] = s.time; });
-  let monotone = true;
-  near.stops.forEach(function (s) {
-    if (byDepth[s.depth] !== undefined && s.time > byDepth[s.depth]) monotone = false;
-    if (s.time < 1) monotone = false;
-  });
-  check('stopRounding: per-stop nearest <= ceil and >= minStopTime', monotone,
-    JSON.stringify(near.stops.map(function (s) { return [s.depth, s.time]; })));
-})();
-
-// ---------------------------------------------------------------------------
 console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);

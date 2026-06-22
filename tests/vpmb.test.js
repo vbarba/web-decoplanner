@@ -421,24 +421,5 @@ const ref = VPMB.plan(baseInput());
 })();
 
 // ---------------------------------------------------------------------------
-// stopRounding parity: VPM-B mirrors the ZHL-16C 'nearest' behavior — never
-// longer than 'ceil', default equals 'ceil'. See docs/DECISIONS.md.
-// ---------------------------------------------------------------------------
-(function () {
-  const deep = { segments: [{ depth: 60, time: 30, gasId: 'tx2135' }] };
-  const ceil = VPMB.plan(baseInput(Object.assign({ stopRounding: 'ceil' }, deep)));
-  const near = VPMB.plan(baseInput(Object.assign({ stopRounding: 'nearest' }, deep)));
-  const def = VPMB.plan(baseInput(deep));
-  check('stopRounding: VPM both modes ok', ceil.ok && near.ok,
-    JSON.stringify(ceil.errors) + ' / ' + JSON.stringify(near.errors));
-  check('stopRounding: VPM nearest total deco <= ceil',
-    near.totalDecoTime <= ceil.totalDecoTime + 1e-6,
-    'ceil=' + ceil.totalDecoTime.toFixed(2) + ' nearest=' + near.totalDecoTime.toFixed(2));
-  check('stopRounding: VPM default equals ceil',
-    Math.abs(def.totalDecoTime - ceil.totalDecoTime) < 1e-6,
-    'default=' + def.totalDecoTime.toFixed(2) + ' ceil=' + ceil.totalDecoTime.toFixed(2));
-})();
-
-// ---------------------------------------------------------------------------
 console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);

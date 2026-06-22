@@ -376,7 +376,6 @@
       interval: num(input.stopInterval, 3),
       lastStop: num(input.lastStopDepth, 6),
       minStop: Math.max(1, Math.ceil(num(input.minStopTime, 1) - 1e-9)),
-      stopRounding: input.stopRounding === 'nearest' ? 'nearest' : 'ceil',
       gasSwitchStopTime: num(input.gasSwitchStopTime, 1),
       ppO2MaxDeco: num(input.ppO2MaxDeco, 1.61),
       includeTravel: input.segmentTimesIncludeTravel !== false,
@@ -724,23 +723,12 @@
         // Baker's DECOMPRESSION_STOP: every rung from the first stop down is a
         // stop; wait in whole-minute increments until the deco ceiling clears
         // the next stop (contract: integer stop durations, >= minStopTime).
-        // stopRounding 'nearest' trims the final sub-minute when the ceiling
-        // already clears at the half-minute mark — mirrors the ZHL-16C engine
-        // and closes the +0..2 min gap vs DecoPlanner (see docs/DECISIONS.md).
         pending.shift();
         const dn = pending.length ? pending[0] : 0;
         const pNext = P.pAmb(dn);
         const gB = boyleSet(grads, firstStopP, pNext, P.boyleOn && opts.boyleOn !== false);
-        const nearest = P.stopRounding === 'nearest';
         let k = 0;
         while ((!canLeave(gB, pNext) || k < P.minStop) && k < 999) {
-          if (nearest && k >= P.minStop) {
-            // probe the half-minute mark on cloned tissues; if it clears, the
-            // true requirement is in (k, k+0.5] and rounds DOWN to k.
-            const ht = cloneT(t);
-            applyConst(ht, P.pAmb(depth), gas, 0.5);
-            if (maxToleratedWith(ht, gB) <= pNext + 1e-9) break;
-          }
           holdMinute();
           k++;
         }

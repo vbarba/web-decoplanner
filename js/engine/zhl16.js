@@ -155,7 +155,6 @@
       stopInterval: def(input.stopInterval, 3),
       lastStop: def(input.lastStopDepth, 6),
       minStop: def(input.minStopTime, 1),
-      stopRounding: input.stopRounding === 'nearest' ? 'nearest' : 'ceil',
       switchHold: def(input.gasSwitchStopTime, 1),
       ppO2MaxDeco: def(input.ppO2MaxDeco, 1.61),
       includeTravel: def(input.segmentTimesIncludeTravel, true),
@@ -378,36 +377,14 @@
   // Whole minutes to wait at the current stop until the ceiling (with the
   // GF of the NEXT stop) clears that next depth. Computed on cloned tissues;
   // the caller then applies the stay via holdAt(). null = never clears.
-  //
-  // stopRounding (ctx.stopRounding):
-  //   'ceil'    (default) — return the first whole minute at which the ceiling
-  //             clears; the true fractional requirement is always rounded UP.
-  //             This is Erik Baker's reference DECOMPRESSION_STOP behavior and
-  //             the conservative choice (HALDANE's historical default).
-  //   'nearest' — round the true fractional requirement to the NEAREST whole
-  //             minute: if the ceiling already clears at the half-minute mark
-  //             (mins - 0.5), the real obligation was <= mins - 0.5, so drop to
-  //             mins - 1 (never below minStop). Matches the rounding policy used
-  //             by V-Planner / DecoPlanner-style tools and closes the +0..2 min
-  //             gap documented in docs/DECISIONS.md. Never rounds UP past ceil,
-  //             only trims the last sub-minute when it is < 0.5.
   function computeStopMinutes(sim, gfNext, nextDepth) {
     const ctx = sim.ctx;
     const pn = sim.pn.slice();
     const ph = sim.ph.slice();
     const gas = ctx.gases[sim.gasId];
     const minStop = Math.max(1, Math.ceil(ctx.minStop - EPS));
-    const nearest = ctx.stopRounding === 'nearest';
     let mins = 0;
     while (mins < 999) {
-      // For 'nearest', probe the half-minute mark BEFORE completing this minute:
-      // if the ceiling already clears at mins+0.5, the true requirement is in
-      // (mins, mins+0.5] and rounds DOWN to mins (provided mins >= minStop).
-      if (nearest && mins >= minStop) {
-        const hn = pn.slice(), hh = ph.slice();
-        loadConstant(hn, hh, ctx, sim.depth, 0.5, gas);
-        if (ceilingDepth(hn, hh, gfNext, ctx) <= nextDepth + EPS) return mins;
-      }
       loadConstant(pn, ph, ctx, sim.depth, 1, gas);
       mins++;
       if (mins >= minStop && ceilingDepth(pn, ph, gfNext, ctx) <= nextDepth + EPS) return mins;
