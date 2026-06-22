@@ -1,0 +1,56 @@
+# git-cliff configuration — changelog + next-version from Conventional Commits.
+# https://git-cliff.org
+#
+# Used by .github/workflows/release.yml:
+#   git cliff --bumped-version      -> next semver (feat=minor, fix=patch, BREAKING=major)
+#   git cliff --tag vX.Y.Z -o CHANGELOG.md   -> full changelog
+#   git cliff --current             -> just this release's notes
+#
+# Also runnable locally for dry-runs:
+#   git cliff --bumped-version
+#   git cliff --unreleased
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to HALDANE, generated from Conventional Commits.
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}
+{% endfor %}\
+{% endfor %}\n
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+# Map commit type prefixes to changelog sections; skip noise.
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactor" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  { message = "^test", skip = true },
+  { message = "^style", skip = true },
+]
+filter_commits = false
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "oldest"

@@ -1,0 +1,24 @@
+{
+  "name": "haldane-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Desktop packaging for the HALDANE decompression planner (isolated tooling).",
+  "author": "Victor Barba",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "prepare:app": "node scripts/prepare.js",
+    "start": "npm run prepare:app && electron .",
+    "build": "npm run prepare:app && electron-builder",
+    "build:mac": "npm run prepare:app && electron-builder --mac",
+    "build:linux": "npm run prepare:app && electron-builder --linux",
+    "build:win": "npm run prepare:app && electron-builder --win",
+    "icons": "node scripts/gen-icons.js"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0",
+    "png2icons": "^2.0.1",
+    "sharp": "^0.33.0"
+  }
+}

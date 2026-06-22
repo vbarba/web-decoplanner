@@ -35,11 +35,32 @@ jobs:
           # so a fresh clone of this repo deploys without manual setup.
           enablement: true
 
+      - name: Stage site (web app only — exclude desktop packaging + tooling)
+        # The published site is just the static web app. Everything that exists
+        # only to BUILD the desktop app or the release (desktop/, scripts/,
+        # tests, docs, CI) must NOT reach the public Pages site. Keep .nojekyll
+        # (disables Jekyll), css/, js/, index.html, and the published CHANGELOG/LICENSE.
+        run: |
+          mkdir -p _site
+          rsync -a --delete \
+            --exclude '.git' \
+            --exclude 'desktop' \
+            --exclude 'scripts' \
+            --exclude 'tests' \
+            --exclude 'docs' \
+            --exclude '.github' \
+            --exclude '.shots' \
+            --exclude '.claude' \
+            --exclude 'node_modules' \
+            --exclude '_site' \
+            --exclude 'cliff.toml' \
+            ./ _site/
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # The whole repo root is the site; it is already static.
-          path: .
+          # Only the staged web app (see the Stage step above), not the repo root.
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment

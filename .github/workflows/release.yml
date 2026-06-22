@@ -1,0 +1,148 @@
+name: Release
+
+# On every push to main: compute the next version from Conventional Commits,
+# bump the in-repo VERSION strings, regenerate CHANGELOG.md, tag, create a
+# GitHub Release, and attach desktop installers (mac / linux / windows).
+#
+# If there are no feat/fix/breaking commits since the last tag, NOTHING is
+# released (no empty tag, no changelog churn).
+#
+# ── LOOP AVOIDANCE (read before editing) ──────────────────────────────────────
+# The `version` job pushes a "chore(release)" commit back to main. That push
+# uses the default GITHUB_TOKEN, and GitHub does NOT trigger workflow runs from
+# GITHUB_TOKEN pushes — so it re-triggers neither this workflow nor
+# deploy-pages.yml. DO NOT change that push to use a PAT: it would reintroduce an
+# infinite release loop. The `[skip release]` guard below is defense-in-depth.
+on:
+  push:
+    branches: [main]
+
+# Needed to push the bump commit + tag and to create the Release.
+permissions:
+  contents: write
+
+# One release at a time; never cancel an in-progress one mid-tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # ── JOB 1: version, changelog, tag, create the (empty) GitHub Release ────────
+  version:
+    runs-on: ubuntu-latest
+    # Defense-in-depth: skip our own bump commit even if it ever re-triggers.
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    outputs:
+      released: ${{ steps.decide.outputs.released }}
+      tag: ${{ steps.decide.outputs.tag }}
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install git-cliff
+        uses: orhun/git-cliff-action@v3
+        with:
+          version: latest
+          args: --version
+
+      - name: Decide next version
+        id: decide
+        run: |
+          set -euo pipefail
+          NEXT="$(git cliff --bumped-version 2>/dev/null || true)"
+          NEXT="${NEXT#v}"
+          LAST="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
+          LAST="${LAST#v}"
+          echo "git-cliff next='${NEXT}'  last-tag='${LAST}'"
+          if [ -z "${NEXT}" ] || [ "${NEXT}" = "${LAST}" ]; then
+            echo "Nothing to release (no feat/fix/breaking since last tag)."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+            echo "tag=v${NEXT}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump in-repo VERSION strings + desktop/package.json
+        if: steps.decide.outputs.released == 'true'
+        run: node scripts/bump-version.js "${{ steps.decide.outputs.version }}"
+
+      - name: Generate CHANGELOG.md
+        if: steps.decide.outputs.released == 'true'
+        run: git cliff --tag "${{ steps.decide.outputs.tag }}" -o CHANGELOG.md
+
+      - name: Commit, tag, push
+        if: steps.decide.outputs.released == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "haldane-release-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md \
+            js/engine/zhl16.js js/ui/charts.js js/engine/vpmb.js \
+            desktop/package.json
+          # [skip release] keeps this from looping if a PAT is ever introduced.
+          git commit -m "chore(release): ${{ steps.decide.outputs.tag }} [skip release]"
+          git tag "${{ steps.decide.outputs.tag }}"
+          git push origin HEAD:main --follow-tags
+
+      - name: Create GitHub Release (notes from changelog)
+        if: steps.decide.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git cliff --current -o RELEASE_NOTES.md
+          gh release create "${{ steps.decide.outputs.tag }}" \
+            --title "${{ steps.decide.outputs.tag }}" \
+            --notes-file RELEASE_NOTES.md
+
+  # ── JOB 2: build installers on each OS, attach to the Release ───────────────
+  build:
+    needs: version
+    if: needs.version.outputs.released == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v4
+        with:
+          # Build the exact tag the version job created, so the binaries embed
+          # the bumped VERSION strings + desktop/package.json version.
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build installer (prepare.js copies app + fetches fonts, then electron-builder)
+        working-directory: desktop
+        env:
+          # Keep the macOS build UNSIGNED (no Apple cert / notarization).
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build
+
+      - name: Upload installers to the Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # Each OS only produces its own artifact types; --clobber + nullglob
+          # let this one step work unchanged across the matrix.
+          shopt -s nullglob
+          files=(desktop/dist/*.dmg desktop/dist/*.AppImage desktop/dist/*.deb desktop/dist/*.exe)
+          echo "Uploading: ${files[*]}"
+          gh release upload "${{ needs.version.outputs.tag }}" "${files[@]}" --clobber

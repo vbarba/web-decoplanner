@@ -3,6 +3,43 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## Desktop packaging isolated in `desktop/`; releases via git-cliff + plain Node
+
+HALDANE is now also shippable as an offline desktop app (mac/linux/windows),
+with automated GitHub Releases on push to `main`. This sits on top of a web app
+whose hard rule is **zero dependencies, no build step, no npm** (see below). The
+two are reconciled by **isolation**, not by relaxing the constraint:
+
+- **All desktop tooling lives in `desktop/`** — Electron + electron-builder, and
+  the repo's *only* `package.json`. The web app at the repo root is untouched and
+  still runs by opening `index.html`. `desktop/` is excluded from the GitHub
+  Pages artifact (`deploy-pages.yml` stages the web app into `_site/` and drops
+  `desktop/`, `scripts/`, `tests/`, `docs/`), so none of it reaches the public
+  site.
+- **The web app is copied, never duplicated or modified.** `desktop/scripts/prepare.js`
+  copies `index.html` + `css/` + `js/` into a gitignored `desktop/build/app/` at
+  build time — repo root stays the single source of truth. The only file that is
+  ever rewritten is the *copy*: its Google-Fonts `<link>` is swapped for a local
+  `fonts/fonts.css` (fonts fetched at build time by `fetch-fonts.js`) so the
+  desktop app is fully offline, while the online Pages version keeps using the
+  CDN. CSS already has system-font fallbacks, so a failed fetch degrades cleanly.
+- **Electron over Tauri:** pure Node/JS tooling matches the project's Node-based
+  tests and needs no Rust/native toolchain in CI; the cost is larger (~100 MB)
+  unsigned installers, accepted because Pages remains the primary distribution.
+- **git-cliff + a plain-Node bump script over semantic-release:** semantic-release
+  is heavy and wants an npm package at the repo root — exactly what this project
+  avoids. `git-cliff` (one binary, one `cliff.toml`) computes the next version
+  from Conventional Commits *and* generates `CHANGELOG.md`; `scripts/bump-version.js`
+  (zero-dep) writes that version into the three in-repo `VERSION` strings +
+  `desktop/package.json`. This matches the "plain Node scripts" ethos of the test
+  suite. The vpmb.js `VERSION` descriptor carries parameterization numbers
+  (`4.5`/`6500`/`1.2`); the bump regex anchors on `'VPM-B <semver> (` so only the
+  leading semver changes — see the CLAUDE.md note that this string can drift.
+- **Loop avoidance:** the release job pushes a `chore(release)` bump commit with
+  the default `GITHUB_TOKEN`, which GitHub does not let re-trigger workflows — so
+  it loops neither `release.yml` nor `deploy-pages.yml`. A `[skip release]` marker
+  + an `if:` guard are defense-in-depth. Do **not** switch that push to a PAT.
+
 ## Stop-time rounding mode (`stopRounding`: `ceil` vs `nearest`)
 
 A user reported HALDANE's total deco running **+0–2 min longer** than DecoPlanner

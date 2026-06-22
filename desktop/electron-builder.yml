@@ -1,0 +1,38 @@
+# electron-builder configuration for HALDANE desktop.
+# Builds are UNSIGNED (educational tool) — see desktop/README.md for the
+# Gatekeeper / SmartScreen workarounds users will need.
+appId: com.haldane.decoplanner
+productName: HALDANE
+copyright: HALDANE — educational dive decompression planner
+
+directories:
+  output: dist            # desktop/dist/ (gitignored)
+  buildResources: icons
+
+# Ship only the runtime. build/app/** is produced by scripts/prepare.js BEFORE
+# electron-builder runs (it copies the web app and bundles fonts locally).
+files:
+  - main.js
+  - preload.js
+  - build/app/**/*
+
+mac:
+  target: dmg
+  icon: icons/icon.icns
+  category: public.app-category.education
+  identity: null          # UNSIGNED — no Apple Developer cert / notarization
+
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: icons/icon.png
+  category: Education
+
+win:
+  target: nsis
+  icon: icons/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

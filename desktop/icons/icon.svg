@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- HALDANE app mark — the sonar dot from the favicon, on an opaque abyss
+       background (installers dislike transparency in the master image). -->
+  <rect width="1024" height="1024" fill="#04070d"/>
+  <!-- faint outer sonar ring -->
+  <circle cx="512" cy="512" r="392" fill="none" stroke="#35e0c2" stroke-width="14" opacity="0.18"/>
+  <!-- main ring -->
+  <circle cx="512" cy="512" r="288" fill="none" stroke="#35e0c2" stroke-width="44"/>
+  <!-- phosphor core -->
+  <circle cx="512" cy="512" r="92" fill="#35e0c2"/>
+</svg>

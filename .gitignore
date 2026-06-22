@@ -5,3 +5,12 @@
 .playwright-mcp/
 node_modules/
 *.log
+
+# Desktop packaging (isolated tooling in desktop/) — generated outputs only.
+# The desktop/ SOURCE (package.json, scripts, icons, main.js) IS committed.
+desktop/build/
+desktop/dist/
+
+# Release / CI scratch
+RELEASE_NOTES.md
+_site/
