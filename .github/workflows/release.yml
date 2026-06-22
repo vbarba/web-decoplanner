@@ -16,6 +16,14 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manual: build + attach installers for an EXISTING tag, without cutting a new
+  # version. Use this to (re)build a tag like v1.0.0 on demand.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build installers for (e.g. v1.0.0)"
+        required: true
+        type: string
 
 # Needed to push the bump commit + tag and to create the Release.
 permissions:
@@ -33,8 +41,9 @@ jobs:
     # Defense-in-depth: skip our own bump commit even if it ever re-triggers.
     if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
     outputs:
-      released: ${{ steps.decide.outputs.released }}
-      tag: ${{ steps.decide.outputs.tag }}
+      # Either path (manual dispatch or push) sets these; one is always empty.
+      released: ${{ steps.decide.outputs.released || steps.manual.outputs.released }}
+      tag: ${{ steps.decide.outputs.tag || steps.manual.outputs.tag }}
     steps:
       - name: Checkout (full history + tags)
         uses: actions/checkout@v4
@@ -42,7 +51,31 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Manual dispatch: just build an existing tag — skip versioning entirely
+      # (no git-cliff, no bump, no new commit/tag).
+      - name: Decide (manual dispatch — build an existing tag)
+        id: manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::Tag ${TAG} does not exist."; exit 1
+          fi
+          # Ensure a Release exists for that tag so the build job can attach to it.
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Creating release ${TAG} (auto-generated notes)."
+            gh release create "${TAG}" --title "${TAG}" --generate-notes
+          else
+            echo "Release ${TAG} already exists; will attach installers to it."
+          fi
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Install git-cliff
+        if: github.event_name == 'push'
         uses: orhun/git-cliff-action@v3
         with:
           version: latest
@@ -50,6 +83,7 @@ jobs:
 
       - name: Decide next version
         id: decide
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           NEXT="$(git cliff --bumped-version 2>/dev/null || true)"
@@ -67,15 +101,15 @@ jobs:
           fi
 
       - name: Bump in-repo VERSION strings + desktop/package.json
-        if: steps.decide.outputs.released == 'true'
+        if: github.event_name == 'push' && steps.decide.outputs.released == 'true'
         run: node scripts/bump-version.js "${{ steps.decide.outputs.version }}"
 
       - name: Generate CHANGELOG.md
-        if: steps.decide.outputs.released == 'true'
+        if: github.event_name == 'push' && steps.decide.outputs.released == 'true'
         run: git cliff --tag "${{ steps.decide.outputs.tag }}" -o CHANGELOG.md
 
       - name: Commit, tag, push
-        if: steps.decide.outputs.released == 'true'
+        if: github.event_name == 'push' && steps.decide.outputs.released == 'true'
         run: |
           set -euo pipefail
           git config user.name "haldane-release-bot"
@@ -89,7 +123,7 @@ jobs:
           git push origin HEAD:main --follow-tags
 
       - name: Create GitHub Release (notes from changelog)
-        if: steps.decide.outputs.released == 'true'
+        if: github.event_name == 'push' && steps.decide.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
