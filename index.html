@@ -246,7 +246,7 @@
         <div class="panel-head">
           <h2 class="panel-title" id="table-title" data-i18n="box.table" data-i18n-title="tip.table" title="Minute-by-minute runtime: every level, gas switch and decompression stop, with running time and ppO₂. Regenerated automatically whenever you change a setting.">Runtime table</h2>
           <div class="table-tools">
-            <button type="button" class="ghost-btn" id="summary-btn" aria-pressed="false" aria-controls="panel-summary" data-i18n="btn.summary" data-i18n-title="tip.summary" title="Build a summarized stop table with ±3 m / ±1 min contingency rows">SUMMARY</button>
+            <button type="button" class="ghost-btn" id="matrix-btn" aria-pressed="false" aria-controls="panel-matrix" data-i18n="btn.matrix" data-i18n-title="tip.matrix" title="Build a deco-time table over a range of bottom times (rows = stop depths, columns = bottom times) at ±3 m depth contingencies">CREATE TABLE</button>
             <button type="button" class="ghost-btn" id="travel-btn" aria-pressed="false" data-i18n="btn.travel" data-i18n-title="tip.travel" title="Show ascent/descent travel legs in the table">TRAVEL</button>
             <button type="button" class="ghost-btn" id="copy-btn" data-i18n="btn.copy" data-i18n-title="tip.copy" title="Copy plan as text">COPY</button>
           </div>
@@ -265,14 +265,29 @@
         </table>
       </section>
 
-      <section class="panel reveal" id="panel-summary" aria-labelledby="summary-title" hidden>
+      <section class="panel reveal" id="panel-matrix" aria-labelledby="matrix-title" hidden>
         <div class="panel-head">
-          <h2 class="panel-title" id="summary-title" data-i18n="box.summary" data-i18n-title="tip.summary" title="Summarized stop ladder with contingency rows for ±3 m deeper/shallower and ±1 min longer/shorter than planned.">Summarized table</h2>
+          <h2 class="panel-title" id="matrix-title" data-i18n="box.matrix" data-i18n-title="tip.matrix" title="Deco-stop times over a range of bottom times. One sub-table per depth (planned ±3 m); columns are bottom times, rows are stop depths.">Deco-time table</h2>
           <div class="table-tools">
-            <button type="button" class="ghost-btn" id="summary-copy-btn" data-i18n="btn.copy" data-i18n-title="tip.copy" title="Copy plan as text">COPY</button>
+            <button type="button" class="ghost-btn" id="matrix-copy-btn" data-i18n="btn.copy" data-i18n-title="tip.copyMatrix" title="Copy the table as tab-separated values (paste into Excel)">COPY</button>
           </div>
         </div>
-        <div id="summary-body"></div>
+        <div class="matrix-controls" id="matrix-controls">
+          <label class="matrix-ctl">
+            <span data-i18n="mtx.start" data-i18n-title="tip.mtxStart" title="Shortest bottom time in the range (min)">START</span>
+            <input type="number" id="matrix-start" min="1" max="999" step="1" inputmode="numeric">
+          </label>
+          <label class="matrix-ctl">
+            <span data-i18n="mtx.end" data-i18n-title="tip.mtxEnd" title="Longest bottom time in the range (min)">END</span>
+            <input type="number" id="matrix-end" min="1" max="999" step="1" inputmode="numeric">
+          </label>
+          <label class="matrix-ctl">
+            <span data-i18n="mtx.step" data-i18n-title="tip.mtxStep" title="Step between bottom times (min)">INTERVAL</span>
+            <input type="number" id="matrix-step" min="1" max="120" step="1" inputmode="numeric">
+          </label>
+          <span class="matrix-ctl-unit" data-i18n="mtx.minutes">min</span>
+        </div>
+        <div id="matrix-body"></div>
       </section>
 
       <section class="panel reveal" id="panel-gas" aria-labelledby="gasreq-title">

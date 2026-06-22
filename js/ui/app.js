@@ -103,6 +103,8 @@
       gasReserve: 'mingas',
       extraReserveBar: 0,    // fixed reserve added on top of every rule (bar)
       showTravel: false,     // view-only: show ascent/descent travel legs in the table
+      // Deco-time table range (bottom-time sweep), UI-only — see CREATE TABLE.
+      matrixStart: 20, matrixEnd: 40, matrixStep: 5,
       segments: [{ depth: 45, time: 30, gasId: 'tx2135' }],
       gases: [
         { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom', cyl: 'd2x12', startBar: 232 },
@@ -122,10 +124,10 @@
   var gasSeq = 0;              // unique id counter for added gases
   var planTimer = null;
   var copyTimer = null;
-  var summaryCopyTimer = null;
+  var matrixCopyTimer = null;
   var saveTimer = null;
-  var summaryOpen = false;     // view-only: the summarized/contingency table is shown
-  var lastSummary = null;      // last built summary (for COPY)
+  var matrixOpen = false;      // view-only: the deco-time table is shown
+  var lastMatrix = null;       // last built matrix model (for COPY)
   var hasEngine = false, hasVPM = false, hasCharts = false;
 
   var reduceMotion = false;
@@ -245,7 +247,8 @@
     });
     if (typeof s.lang === 'string' || s.lang === null) d.lang = s.lang;
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
-     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar']
+     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar',
+     'matrixStart', 'matrixEnd', 'matrixStep']
       .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
     if (typeof s.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = s.segmentTimesIncludeTravel;
     if (typeof s.showTravel === 'boolean') d.showTravel = s.showTravel;
@@ -1218,7 +1221,7 @@
 
     renderTiles(result, animate);
     renderTable(result, animate);
-    refreshSummary();   // re-plan the contingency table if it is open
+    refreshMatrix();   // re-plan the deco-time table if it is open
     renderGasUsage(result);
     renderWarnings(result, gasSupplyWarnings(result));
     renderCharts(result);
@@ -1596,14 +1599,16 @@
   }
 
   /* ----------------------------------------------------------
-     SUMMARIZED / contingency table
+     DECO-TIME TABLE (bottom-time sweep)
      ----------------------------------------------------------
-     Collapses the active engine's minute-by-minute runtime into just the
-     stop ladder, and re-plans four contingency variants around the planned
-     dive: ±3 m deeper/shallower and ±1 min longer/shorter (the depth delta
-     applies to the deepest segment, the time delta to the bottom time). The
-     single longest stop is the "long stop"; the rest are "short stops".
-     Engine-only: it calls the same plan() the runtime table uses. */
+     Re-plans the dive across a user-defined range of bottom times
+     (start..end by interval) at three depth contingencies — planned,
+     +3 m and −3 m — producing one sub-table per depth. In each sub-table
+     columns are bottom times and rows are decompression stop depths; each
+     cell is that stop's minutes. Grouped sum rows (Deep ≥39 m, Deep-Int
+     24–36 m, Intermediate 9–21 m, Shallow 3+6 m) and a TOTAL DECO row are
+     appended. Engine-only: it calls the same plan() the runtime table uses,
+     and the COPY is tab-separated so it pastes cleanly into a spreadsheet. */
 
   function tr(key) {
     return hasI18n ? window.I18N.t(key) : key;
@@ -1618,76 +1623,22 @@
     return idx;
   }
 
-  // Plan a contingency variant: a deep copy of the current input with the
-  // deepest segment's depth and/or time nudged by the given deltas (metric;
-  // clamped to >= 1 m / >= 1 min). Returns the engine result, or null on fault.
-  function planVariant(input, dDepth, dTime) {
+  // Plan a variant: a deep copy of the current input with the deepest
+  // segment's depth nudged by dDepth (metric, clamped ≥1 m) and/or its time
+  // SET to absTime (when given; else nudged by dTime). Returns the engine
+  // result, or an ok=false stub on fault.
+  function planVariant(input, dDepth, dTime, absTime) {
     var v = JSON.parse(JSON.stringify(input));
     var i = deepestSegIndex(v);
     var seg = v.segments[i];
     if (!seg) return null;
     if (dDepth) seg.depth = Math.max(1, seg.depth + dDepth);
-    if (dTime) seg.time = Math.max(1, seg.time + dTime);
-    try {
-      if (v.algorithm === 'VPMB' && hasVPM) return window.VPMB.plan(v);
-      if (hasEngine) return window.DecoEngine.plan(v);
-      return buildMock(v);
-    } catch (e) {
-      return { ok: false, errors: ['Engine exception: ' + (e && e.message ? e.message : e)], warnings: [] };
-    }
+    if (absTime !== undefined) seg.time = Math.max(1, absTime);
+    else if (dTime) seg.time = Math.max(1, seg.time + dTime);
+    return runActive(v);
   }
 
-  // Collapse result.stops into { short:[{depth,time}], long:{depth,time}|null }.
-  // The single longest stop (ties broken by greater depth) is the long stop.
-  function summarizeStops(result) {
-    var stops = (result && result.stops ? result.stops : []).map(function (s) {
-      return { depth: s.depth, time: s.time };
-    });
-    if (!stops.length) return { short: [], long: null };
-    var li = 0;
-    for (var i = 1; i < stops.length; i++) {
-      if (stops[i].time > stops[li].time ||
-         (stops[i].time === stops[li].time && stops[i].depth > stops[li].depth)) li = i;
-    }
-    var long = stops[li];
-    var short = stops.filter(function (s, i2) { return i2 !== li; });
-    return { short: short, long: long };
-  }
-
-  // The five variants shown, in order: planned, then the four contingencies.
-  function summaryVariants() {
-    return [
-      { key: 'plan',  labelKey: 'sum.planned', dDepth: 0,  dTime: 0,  badge: '' },
-      { key: 'deep',  label: '+3 ' + depthUnit(), dDepth: 3,  dTime: 0 },
-      { key: 'shal',  label: '−3 ' + depthUnit(), dDepth: -3, dTime: 0 },
-      { key: 'long',  label: '+1 min',            dDepth: 0,  dTime: 1 },
-      { key: 'short', label: '−1 min',            dDepth: 0,  dTime: -1 }
-    ];
-  }
-
-  // Build every variant's result + stop summary. Returns rows for render/copy.
-  function buildSummaryRows() {
-    var base = buildInput();
-    var baseDeepIdx = deepestSegIndex(base);
-    return summaryVariants().map(function (vr) {
-      var res = (vr.dDepth || vr.dTime) ? planVariant(base, vr.dDepth, vr.dTime)
-                                        : runActive(base);
-      var seg = base.segments[baseDeepIdx] || { depth: 0, time: 0 };
-      var depthM = Math.max(1, seg.depth + (vr.dDepth || 0));
-      var timeM = Math.max(1, seg.time + (vr.dTime || 0));
-      return {
-        key: vr.key,
-        labelKey: vr.labelKey,
-        label: vr.label,
-        depthM: depthM,
-        timeM: timeM,
-        result: res,
-        summary: res && res.ok ? summarizeStops(res) : null
-      };
-    });
-  }
-
-  // Run the active engine on a freshly-built input (used for the planned row).
+  // Run the active engine on a freshly-built input.
   function runActive(input) {
     try {
       if (input.algorithm === 'VPMB' && hasVPM) return window.VPMB.plan(input);
@@ -1698,143 +1649,261 @@
     }
   }
 
-  // "21·1  18·2  15·3" — grouped short-stop string (depth·minutes, display units).
-  function shortStopsText(short) {
-    if (!short || !short.length) return tr('sum.none');
-    return short.map(function (s) {
-      return depthOut(s.depth) + '·' + fmt(s.time, 0);
-    }).join('  ');
-  }
-  function longStopText(long) {
-    if (!long) return '—';
-    return depthOut(long.depth) + ' ' + depthUnit() + ' / ' + fmt(long.time, 0) + ' min';
-  }
-
-  function summaryVariantLabel(row) {
-    var name = row.labelKey ? tr(row.labelKey) : (row.label || row.key);
-    var prof = depthOut(row.depthM) + ' ' + depthUnit() + ' · ' + fmt(row.timeM, 0) + ' min';
-    return { name: name, prof: prof };
+  // The bottom-time column range from state (start..end by step, metric min).
+  // Always at least the start value; clamped/normalised defensively.
+  function matrixTimes() {
+    var start = clampInt(state.matrixStart, 1, 999);
+    var end = clampInt(state.matrixEnd, 1, 999);
+    var step = clampInt(state.matrixStep, 1, 120);
+    if (end < start) { var t = start; start = end; end = t; }
+    var out = [];
+    for (var v = start; v <= end; v += step) {
+      out.push(v);
+      if (out.length >= 64) break; // safety cap on column count
+    }
+    if (out.length && out[out.length - 1] !== end && out.length < 64) out.push(end);
+    return out;
   }
 
-  function renderSummaryTable(rows) {
-    var host = $('summary-body');
+  // Depth contingency blocks: planned, +3 m, −3 m (metric deltas).
+  function matrixDepthBlocks() {
+    return [
+      { key: 'plan', dDepth: 0 },
+      { key: 'deep', dDepth: 3 },
+      { key: 'shal', dDepth: -3 }
+    ];
+  }
+
+  // Grouped stop-depth buckets (metric msw), deepest first. A stop falls in
+  // the first bucket whose [lo,hi] contains its depth; stops outside every
+  // bucket still count toward TOTAL DECO but no group.
+  var MATRIX_GROUPS = [
+    { key: 'deep',    lo: 39, hi: Infinity },
+    { key: 'deepInt', lo: 24, hi: 36 },
+    { key: 'inter',   lo: 9,  hi: 21 },
+    { key: 'shallow', lo: 3,  hi: 6 }
+  ];
+  function matrixGroupKey(depthM) {
+    for (var i = 0; i < MATRIX_GROUPS.length; i++) {
+      var g = MATRIX_GROUPS[i];
+      if (depthM >= g.lo && depthM <= g.hi) return g.key;
+    }
+    return null;
+  }
+
+  // Build one depth block: { depthM, cols:[{timeM, result, stopMap, groups, totalDeco}] }.
+  // stopMap is keyed by stop depth (msw) → minutes. groups is keyed by group key → minutes.
+  function buildMatrixBlock(base, baseDeepIdx, block, times) {
+    var seg = base.segments[baseDeepIdx] || { depth: 0, time: 0 };
+    var depthM = Math.max(1, seg.depth + (block.dDepth || 0));
+    var cols = times.map(function (timeM) {
+      var res = planVariant(base, block.dDepth, 0, timeM);
+      var stopMap = {}, groups = {};
+      var totalDeco = null;
+      if (res && res.ok) {
+        totalDeco = res.totalDecoTime;
+        (res.stops || []).forEach(function (s) {
+          var d = s.depth, t = s.time;
+          stopMap[d] = (stopMap[d] || 0) + t;
+          var gk = matrixGroupKey(d);
+          if (gk) groups[gk] = (groups[gk] || 0) + t;
+        });
+      }
+      return { timeM: timeM, result: res, stopMap: stopMap, groups: groups, totalDeco: totalDeco };
+    });
+    return { depthM: depthM, cols: cols };
+  }
+
+  // Build the full matrix model: one block per depth contingency.
+  function buildMatrixModel() {
+    var base = buildInput();
+    var baseDeepIdx = deepestSegIndex(base);
+    var times = matrixTimes();
+    var blocks = matrixDepthBlocks().map(function (b) {
+      return buildMatrixBlock(base, baseDeepIdx, b, times);
+    });
+    return { times: times, blocks: blocks };
+  }
+
+  // All stop depths present across a block's columns, deepest-first (msw).
+  function blockStopDepths(block) {
+    var seen = {};
+    block.cols.forEach(function (c) {
+      Object.keys(c.stopMap).forEach(function (d) { seen[d] = true; });
+    });
+    return Object.keys(seen).map(Number).sort(function (a, b) { return b - a; });
+  }
+  // Which group keys actually occur in a block (to skip empty group rows).
+  function blockGroupKeys(block) {
+    var present = {};
+    block.cols.forEach(function (c) {
+      Object.keys(c.groups).forEach(function (k) { present[k] = true; });
+    });
+    return MATRIX_GROUPS.filter(function (g) { return present[g.key]; }).map(function (g) { return g.key; });
+  }
+  function matrixGroupLabel(key) {
+    return tr('mtx.grp.' + key);
+  }
+  function matrixDepthHeader(block) {
+    return tr('mtx.depthAt').replace('{d}', depthOut(block.depthM) + ' ' + depthUnit());
+  }
+
+  function renderMatrix(model) {
+    var host = $('matrix-body');
     clear(host);
+    if (!model.times.length) {
+      host.appendChild(mk('p', 'matrix-legend', tr('mtx.empty')));
+      return;
+    }
 
-    var table = mk('table', 'summary-table');
-    var thead = mk('thead');
-    var htr = mk('tr');
-    [tr('sum.variant'), tr('sum.shortStops'), tr('sum.longStop'), tr('sum.deco'), tr('sum.runtime')]
-      .forEach(function (h, i) {
-        var th = mk('th', null, h);
+    model.blocks.forEach(function (block) {
+      var wrap = mk('div', 'matrix-block');
+      wrap.appendChild(mk('h3', 'matrix-block-head', matrixDepthHeader(block)));
+
+      var table = mk('table', 'matrix-table');
+      // Header: stop-depth label + one column per bottom time.
+      var thead = mk('thead');
+      var htr = mk('tr');
+      var th0 = mk('th', 'mtx-col-row', tr('mtx.stopDepth') + ' (' + depthUnit() + ')');
+      th0.setAttribute('scope', 'col');
+      htr.appendChild(th0);
+      block.cols.forEach(function (c) {
+        var th = mk('th', 'num', fmt(c.timeM, 0));
         th.setAttribute('scope', 'col');
-        if (i === 0) th.className = 'sum-col-variant';
         htr.appendChild(th);
       });
-    thead.appendChild(htr);
-    table.appendChild(thead);
+      thead.appendChild(htr);
+      table.appendChild(thead);
 
-    var tbody = mk('tbody');
-    rows.forEach(function (row) {
-      var tr2 = mk('tr', 'sum-row' + (row.key === 'plan' ? ' sum-row-plan' : ''));
-      var lab = summaryVariantLabel(row);
+      var tbody = mk('tbody');
+      // Stop-depth rows, deepest first.
+      blockStopDepths(block).forEach(function (depthM) {
+        var rtr = mk('tr', 'mtx-stop-row');
+        rtr.appendChild(mk('th', 'mtx-row-head num', depthOut(depthM)));
+        block.cols.forEach(function (c) {
+          var v = c.stopMap[depthM];
+          rtr.appendChild(mk('td', 'num', (v ? fmt(v, 0) : '')));
+        });
+        tbody.appendChild(rtr);
+      });
 
-      var tdV = mk('td', 'sum-variant');
-      tdV.appendChild(mk('span', 'sum-variant-name', lab.name));
-      tdV.appendChild(mk('span', 'sum-variant-prof', lab.prof));
-      tr2.appendChild(tdV);
+      // Grouped sum rows (only those present in this block).
+      blockGroupKeys(block).forEach(function (gk) {
+        var rtr = mk('tr', 'mtx-group-row');
+        rtr.appendChild(mk('th', 'mtx-row-head', matrixGroupLabel(gk)));
+        block.cols.forEach(function (c) {
+          var v = c.groups[gk];
+          rtr.appendChild(mk('td', 'num', (v ? fmt(v, 0) : '')));
+        });
+        tbody.appendChild(rtr);
+      });
 
-      if (!row.result || !row.result.ok) {
-        var tdErr = mk('td', 'sum-err');
-        tdErr.setAttribute('colspan', '4');
-        tdErr.textContent = row.result && row.result.errors && row.result.errors.length
-          ? row.result.errors[0] : 'Plan rejected';
-        tr2.appendChild(tdErr);
-        tbody.appendChild(tr2);
-        return;
-      }
+      // TOTAL DECO row.
+      var ttr = mk('tr', 'mtx-total-row');
+      ttr.appendChild(mk('th', 'mtx-row-head', tr('mtx.totalDeco')));
+      block.cols.forEach(function (c) {
+        ttr.appendChild(mk('td', 'num', (c.result && c.result.ok ? fmt(c.totalDeco, 0) : '—')));
+      });
+      tbody.appendChild(ttr);
 
-      var s = row.summary;
-      tr2.appendChild(mk('td', 'sum-short', shortStopsText(s.short)));
-      tr2.appendChild(mk('td', 'sum-long', longStopText(s.long)));
-      tr2.appendChild(mk('td', 'num', fmt(row.result.totalDecoTime, 0) + ' min'));
-      tr2.appendChild(mk('td', 'num', fmt(row.result.totalRuntime, 0) + ' min'));
-      tbody.appendChild(tr2);
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      host.appendChild(wrap);
     });
-    table.appendChild(tbody);
-    host.appendChild(table);
 
-    host.appendChild(mk('p', 'summary-legend', tr('sum.legend')));
+    host.appendChild(mk('p', 'matrix-legend', tr('mtx.legend')));
   }
 
-  // (Re)build and render the summarized table from current settings.
-  function refreshSummary() {
-    if (!summaryOpen) return;
-    lastSummary = buildSummaryRows();
-    renderSummaryTable(lastSummary);
+  // (Re)build and render the deco-time table from current settings.
+  function refreshMatrix() {
+    if (!matrixOpen) return;
+    lastMatrix = buildMatrixModel();
+    renderMatrix(lastMatrix);
   }
 
-  function syncSummaryBtn() {
-    var b = $('summary-btn');
+  function syncMatrixBtn() {
+    var b = $('matrix-btn');
     if (!b) return;
-    b.classList.toggle('active', summaryOpen);
-    b.setAttribute('aria-pressed', summaryOpen ? 'true' : 'false');
+    b.classList.toggle('active', matrixOpen);
+    b.setAttribute('aria-pressed', matrixOpen ? 'true' : 'false');
   }
 
-  function toggleSummary() {
-    summaryOpen = !summaryOpen;
-    var panel = $('panel-summary');
+  // Reflect state range values into the range inputs.
+  function syncMatrixInputs() {
+    var s = $('matrix-start'), e = $('matrix-end'), st = $('matrix-step');
+    if (s) s.value = state.matrixStart;
+    if (e) e.value = state.matrixEnd;
+    if (st) st.value = state.matrixStep;
+  }
+
+  function toggleMatrix() {
+    matrixOpen = !matrixOpen;
+    var panel = $('panel-matrix');
     if (panel) {
-      panel.hidden = !summaryOpen;
+      panel.hidden = !matrixOpen;
       // The panel starts hidden, so revealPanels() skips it; reveal it here
       // when first shown (it carries .reveal → opacity:0 until .revealed).
-      if (summaryOpen) panel.classList.add('revealed');
+      if (matrixOpen) panel.classList.add('revealed');
     }
-    syncSummaryBtn();
-    if (summaryOpen) refreshSummary();
+    syncMatrixBtn();
+    if (matrixOpen) { syncMatrixInputs(); refreshMatrix(); }
   }
 
-  // Monospace text version of the summarized table (for COPY).
-  function summaryText(rows) {
+  // Tab-separated text of the whole matrix (pastes column-aligned into Excel).
+  function matrixText(model) {
     var du = depthUnit();
     var lines = [];
-    lines.push('HALDANE — SUMMARIZED STOP TABLE');
+    lines.push('HALDANE — DECO-TIME TABLE');
     var algoLine = state.algorithm === 'VPMB'
       ? 'VPM-B +' + state.vpmConservatism
       : (state.algorithm === 'ZHL16B' ? 'ZHL-16B+GF ' : 'ZHL-16C+GF ') + state.gfLow + '/' + state.gfHigh;
     lines.push('MODEL ' + algoLine + '  UNITS ' + state.units.toUpperCase());
     lines.push('');
-    lines.push(pad(tr('sum.variant'), 12, true) + pad('DEPTH/TIME', 18, true) +
-      pad(tr('sum.longStop'), 16, true) + pad(tr('sum.deco'), 9, true) + tr('sum.runtime'));
-    lines.push('---------------------------------------------------------------------');
-    rows.forEach(function (row) {
-      var lab = summaryVariantLabel(row);
-      if (!row.result || !row.result.ok) {
-        lines.push(pad(lab.name, 12, true) + pad(lab.prof, 18, true) + 'PLAN REJECTED');
-        return;
-      }
-      var s = row.summary;
-      lines.push(
-        pad(lab.name, 12, true) +
-        pad(lab.prof, 18, true) +
-        pad(longStopText(s.long), 16, true) +
-        pad(fmt(row.result.totalDecoTime, 0) + ' min', 9, true) +
-        fmt(row.result.totalRuntime, 0) + ' min');
-      lines.push('   ' + tr('sum.shortStops') + ': ' + shortStopsText(s.short));
+    model.blocks.forEach(function (block) {
+      lines.push(matrixDepthHeader(block));
+      // Header row: stop-depth label then bottom times.
+      var hdr = [tr('mtx.stopDepth') + ' (' + du + ')'];
+      block.cols.forEach(function (c) { hdr.push(fmt(c.timeM, 0)); });
+      lines.push(hdr.join('\t'));
+      // Stop-depth rows.
+      blockStopDepths(block).forEach(function (depthM) {
+        var row = [depthOut(depthM)];
+        block.cols.forEach(function (c) {
+          var v = c.stopMap[depthM];
+          row.push(v ? fmt(v, 0) : '');
+        });
+        lines.push(row.join('\t'));
+      });
+      // Group rows.
+      blockGroupKeys(block).forEach(function (gk) {
+        var row = [matrixGroupLabel(gk)];
+        block.cols.forEach(function (c) {
+          var v = c.groups[gk];
+          row.push(v ? fmt(v, 0) : '');
+        });
+        lines.push(row.join('\t'));
+      });
+      // Total deco row.
+      var trow = [tr('mtx.totalDeco')];
+      block.cols.forEach(function (c) {
+        trow.push(c.result && c.result.ok ? fmt(c.totalDeco, 0) : '');
+      });
+      lines.push(trow.join('\t'));
+      lines.push('');
     });
-    lines.push('---------------------------------------------------------------------');
-    lines.push(tr('sum.legend'));
+    lines.push(tr('mtx.legend'));
     return lines.join('\n');
   }
 
-  function copySummary() {
-    if (!lastSummary) return;
-    var text = summaryText(lastSummary);
+  function copyMatrix() {
+    if (!lastMatrix) return;
+    var text = matrixText(lastMatrix);
     function done(okFlag) {
-      var btn = $('summary-copy-btn');
+      var btn = $('matrix-copy-btn');
       if (!btn) return;
       btn.textContent = okFlag ? 'COPIED ✓' : 'COPY FAILED';
-      if (summaryCopyTimer) clearTimeout(summaryCopyTimer);
-      summaryCopyTimer = setTimeout(function () {
+      if (matrixCopyTimer) clearTimeout(matrixCopyTimer);
+      matrixCopyTimer = setTimeout(function () {
         btn.textContent = tr('btn.copy');
       }, 1600);
     }
@@ -2134,7 +2203,7 @@
         renderDives();
         if (lastGoodResult) renderResults(lastGoodResult, false);
         applyI18n();
-        refreshSummary();   // rebuild the summarized table in the new language
+        refreshMatrix();   // rebuild the deco-time table in the new language
       });
     }
 
@@ -2155,9 +2224,23 @@
     $('plan-btn').addEventListener('click', function () { runPlan(true); });
     $('copy-btn').addEventListener('click', copyPlan);
 
-    // SUMMARY toggles the summarized/contingency table (re-plans 5 variants).
-    $('summary-btn').addEventListener('click', toggleSummary);
-    $('summary-copy-btn').addEventListener('click', copySummary);
+    // CREATE TABLE toggles the deco-time table (sweeps bottom times × ±3 m).
+    $('matrix-btn').addEventListener('click', toggleMatrix);
+    $('matrix-copy-btn').addEventListener('click', copyMatrix);
+
+    // Range inputs: clamp into state, persist, and re-plan the open table.
+    [['matrix-start', 'matrixStart', 1, 999],
+     ['matrix-end', 'matrixEnd', 1, 999],
+     ['matrix-step', 'matrixStep', 1, 120]].forEach(function (spec) {
+      var el = $(spec[0]);
+      if (!el) return;
+      el.addEventListener('change', function () {
+        state[spec[1]] = clampInt(el.value, spec[2], spec[3]);
+        el.value = state[spec[1]];
+        saveState();
+        refreshMatrix();
+      });
+    });
 
     // --- saved dives
     var saveBtn = $('dive-save-btn');
