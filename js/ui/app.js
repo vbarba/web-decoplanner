@@ -1666,11 +1666,12 @@
   }
 
   // Depth contingency blocks: planned, +3 m, −3 m (metric deltas).
+  // Shallowest → deepest, so the blocks read top-to-bottom by depth.
   function matrixDepthBlocks() {
     return [
+      { key: 'shal', dDepth: -3 },
       { key: 'plan', dDepth: 0 },
-      { key: 'deep', dDepth: 3 },
-      { key: 'shal', dDepth: -3 }
+      { key: 'deep', dDepth: 3 }
     ];
   }
 
