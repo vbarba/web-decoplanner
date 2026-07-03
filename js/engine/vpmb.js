@@ -432,6 +432,29 @@
       P.segments.push({ depth: d, time: tm, gasId: s.gasId });
     }
 
+    // Optional repetitive-dive seed (contract parity with the ZHL engine):
+    // 16 compartments of {pN2,pHe} in bar. The bubble state (crushing /
+    // regenerated nuclei) is NOT carried over — each dive starts from fresh
+    // critical radii, the standard simplification for VPM repetitive planning.
+    P.initialTissues = null;
+    if (input.initialTissues !== undefined && input.initialTissues !== null) {
+      const arr = input.initialTissues;
+      if (!Array.isArray(arr) || arr.length !== NC) {
+        errors.push('initialTissues must be an array of 16 compartments');
+      } else {
+        const n2 = [], he = [];
+        let tOk = true;
+        for (let i = 0; i < NC; i++) {
+          const c = arr[i] || {};
+          const n = num(c.pN2, NaN), h = num(c.pHe, 0);
+          if (!(n >= 0) || !(h >= 0)) tOk = false;
+          n2.push(n); he.push(h);
+        }
+        if (tOk) P.initialTissues = { n2: n2, he: he };
+        else errors.push('initialTissues has invalid compartment pressures');
+      }
+    }
+
     return { errors: errors, warnings: warnings, P: P };
   }
 
@@ -449,7 +472,9 @@
 
   // bottom phase: descent + level segments (+ inter-level travels)
   function simulateBottom(P, errors, sampler) {
-    const t = surfaceTissues(P.surfaceP);
+    const t = P.initialTissues
+      ? { n2: P.initialTissues.n2.slice(), he: P.initialTissues.he.slice() }
+      : surfaceTissues(P.surfaceP);
     const cr = newCrush();
     const rows = [];
     let depth = 0, runtime = 0, deepest = 0;
@@ -720,20 +745,25 @@
 
       const isRung = pending.length && Math.abs(depth - pending[0]) < 1e-6;
       if (isRung) {
-        // Baker's DECOMPRESSION_STOP: every rung from the first stop down is a
-        // stop; wait in whole-minute increments until the deco ceiling clears
-        // the next stop (contract: integer stop durations, >= minStopTime).
+        // Baker's DECOMPRESSION_STOP, runtime-rounding convention (shared
+        // with the ZHL engine and DecoPlanner/GFDECO): the stop ends on a
+        // whole multiple of minStopTime of RUNTIME. A fractional lead-in
+        // absorbs the ascent leg's fraction (always > 0, so every rung is
+        // held), then whole increments until the ceiling clears the next stop.
         pending.shift();
         const dn = pending.length ? pending[0] : 0;
         const pNext = P.pAmb(dn);
         const gB = boyleSet(grads, firstStopP, pNext, P.boyleOn && opts.boyleOn !== false);
-        let k = 0;
-        while ((!canLeave(gB, pNext) || k < P.minStop) && k < 999) {
-          holdMinute();
-          k++;
+        let lead = Math.ceil(runtime / P.minStop - 1e-9) * P.minStop - runtime;
+        if (lead < 1e-9) lead = P.minStop;
+        holdFor(lead);
+        let hold = lead, guard2 = 0;
+        while (!canLeave(gB, pNext) && guard2++ < 999) {
+          holdFor(P.minStop);
+          hold += P.minStop;
         }
-        if (k >= 999) { errors.push('deco stop at ' + depth + ' m did not clear within 999 min'); return { errors: errors }; }
-        mergeHolds(k);
+        if (guard2 >= 999) { errors.push('deco stop at ' + depth + ' m did not clear within 999 min'); return { errors: errors }; }
+        mergeHolds(hold, arrivalRt);
         if (firstActualStop === null) { firstActualStop = depth; firstStopArrivalRt = arrivalRt; }
       } else if (switched) {
         const r = holdAt(depth, P.gasSwitchStopTime, 'switch');
@@ -744,20 +774,29 @@
     if (guard >= 500) { errors.push('ascent scheduler did not terminate'); return { errors: errors }; }
 
     // helpers used above (function declarations are hoisted)
-    function holdMinute() {
+    function holdFor(mins) {
       const pamb = P.pAmb(depth);
-      applyConst(t, pamb, gas, 0.5);
-      if (sampler) sampleNow(runtime + 0.5, depth);
-      applyConst(t, pamb, gas, 0.5);
-      if (sampler) sampleNow(runtime + 1, depth);
-      runtime += 1;
+      let done = 0;
+      while (done < mins - EPS) {
+        const dt = Math.min(0.5, mins - done);
+        applyConst(t, pamb, gas, dt);
+        done += dt;
+        if (sampler) sampleNow(runtime + done, depth);
+      }
+      runtime += mins;
     }
-    function mergeHolds(k) {
+    function mergeHolds(hold, arrRt) {
       const pamb = P.pAmb(depth);
-      const row = makeRow('stop', depth, depth, k, runtime, gas);
+      const row = makeRow('stop', depth, depth, hold, runtime, gas);
       row.ppO2Start = gas.fO2 * pamb; row.ppO2End = gas.fO2 * pamb;
       rows.push(row);
-      stops.push({ depth: depth, time: k, runtime: runtime, gasId: gas.id });
+      // stops[].time = DecoPlanner-style whole-minute figure: stop-end runtime
+      // minus the whole-minute boundary at/below arrival (integer >= minStop).
+      stops.push({
+        depth: depth,
+        time: Math.round(runtime - Math.floor(arrRt / P.minStop + 1e-9) * P.minStop),
+        runtime: runtime, gasId: gas.id
+      });
     }
 
     return {

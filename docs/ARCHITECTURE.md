@@ -35,8 +35,10 @@ top of `js/engine/zhl16.js` — read it before touching either engine. Summary:
 (bar), `water` (`salt`/`fresh`), `descentRate`/`ascentRate`, `stopInterval`,
 `lastStopDepth` (3 or 6), `minStopTime`, `gasSwitchStopTime`, `ppO2MaxDeco`,
 `segmentTimesIncludeTravel`, `segments:[{depth,time,gasId}]`,
-`gases:[{id,fO2,fHe,type}]`, `sacBottom`/`sacDeco`. Each engine always *generates*
-its schedule from these inputs — there is no replay/verify path.
+`gases:[{id,fO2,fHe,type}]`, `sacBottom`/`sacDeco`, and optional
+`initialTissues` (16 × `{pN2,pHe}` in bar — a repetitive-dive seed in the
+`finalTissues` shape; absent → surface air saturation). Each engine always
+*generates* its schedule from these inputs — there is no replay/verify path.
 
 **`result`:** `ok`, `errors[]`, `warnings[]`, `algorithm`, `params` (echo),
 `table[]` (every movement; `phase ∈ desc|level|asc|switch|stop`, with
@@ -59,7 +61,11 @@ intentional exception: NDL semantics; see "Known engine differences" below and
 DECISIONS.md): travel at
 descent/ascent rates; `segmentTimesIncludeTravel` deducts
 travel-in time from a level; stops at `stopInterval` multiples with the
-shallowest = `lastStopDepth`; integer (ceil'd) stop minutes; deco-gas
+shallowest = `lastStopDepth`; **stop ends on whole-minute runtime boundaries**
+(Baker/DecoPlanner runtime rounding — a fractional lead-in absorbs the inbound
+ascent leg, then whole `minStopTime` increments until the next rung clears;
+`stops[].time` is the DecoPlanner-style integer, `table` rows carry the true
+fractional hold); deco-gas
 auto-switch at MOD on ascent (never to a leaner gas); CNS via the NOAA table
 (linear rate interpolation, extrapolated + warned above ppO₂ 1.6); OTU =
 `Σ duration·((avgPpO2−0.5)/0.5)^0.833`; gas usage = `Σ sac·avgPamb·duration`.
@@ -81,11 +87,16 @@ N₂ `b`, and all kinetics — they differ only in the N₂ `a` values at compar
   `(pComp − a·gf)/(gf/b + 1 − gf)`; `gf=1` reduces to the raw Bühlmann M-value.
 - **GF slope:** the first stop is found at `gfLow`, then `gf` interpolates
   linearly from `gfLow` at the first stop to `gfHigh` at the surface. Leaving a
-  stop is allowed when the ceiling evaluated at the *next* stop's `gf` clears
-  that depth. The first stop is found by pre-simulating the ascent on cloned
-  tissues and deepening if off/on-gassing during the ascent moves the ceiling.
+  that depth. The first stop uses a **dynamic / continuous ceiling**
+  (Subsurface/DecoPlanner): seeded at the static `gfLow` round-up, then walked
+  **down** rung by rung on cloned tissues, recomputing the live ceiling at each
+  rung, stopping at the last rung still clear — lands one rung shallower than
+  Baker's static round-up where off-gassing during the ascent recedes the ceiling
+  (see `docs/BAKER-GF-COMPLIANCE.md`).
 - Public helpers (also used by the UI): `gasName`, `mod`, `end` (END, O₂
-  narcotic), `ead`, `bestMix`; plus `_internal` for tests.
+  narcotic), `ead`, `bestMix`, and `surfaceInterval(tissues, minutes, opts)` —
+  off-gasses a `finalTissues`-shaped array on air at the surface, returning the
+  seed for the next dive's `input.initialTissues`; plus `_internal` for tests.
 
 ## VPM-B engine (`js/engine/vpmb.js`)
 
@@ -135,7 +146,7 @@ to `lastStopDepth` (Baker-strict `DECOMPRESSION_STOP`). ZHL's earlier V-Planner-
 "skip already-clear rung" path was removed for strict Erik-Baker GF compliance — see
 [BAKER-GF-COMPLIANCE.md](./BAKER-GF-COMPLIANCE.md). The engines may still place the
 *first stop* at different depths because they are different models (Bühlmann-GF
-round-up ceiling vs VPM-B critical-volume), which is expected.
+dynamic-ceiling vs VPM-B critical-volume), which is expected.
 
 (Three smaller cross-engine conventions — `minStopTime` ceiling, ladder-up to an
 absolute stop-interval grid, and accepting a 0 m / 0-min segment — *were* aligned
@@ -173,6 +184,43 @@ result rendering → COPY → wiring/init. Flow:
 5. **Inputs** — delegated listeners on `#segments-body`/`#gases-list` keyed by
    `data-seg`/`data-gas` + `data-field`. Validation toggles `.invalid` on any
    `.rail [data-vkey]` element (`applyValidation`).
+
+### Repetitive dives (multi-dive plans) are orchestrated in the UI
+
+The Dive panel carries a tab strip (`#dive-tabs`): DIVE 1, DIVE 2, …, `+` to add
+a dive (a deep copy of the last one, default 60 min surface interval), `✕` to
+remove the active one. `state.dives[i] = {si, dive}` where `dive` is a saved-dive
+snapshot and `si` is the surface interval in minutes **before** that dive; the
+top-level `state` is always the ACTIVE dive's working copy, mirrored into its
+record by `syncActiveDive()` on every save. Tab switches reuse `applyDive`.
+
+Tissue carry-over (`carriedTissues()` in `app.js`): dives `1..k−1` are re-planned
+in order — each with its **own** settings, gases, and engine — and each result's
+`finalTissues` is decayed through the surface interval with
+`DecoEngine.surfaceInterval()`, then fed to the next dive as
+`input.initialTissues`. The chain result is cached and invalidated only on
+dive/SI structure changes (editing the active dive never changes what was
+carried into it). If a previous dive fails to plan, the active dive renders an
+error naming it. Saved-dive records of a multi-dive plan carry the whole
+sequence (`dive.dives` + `activeDive`) and restore it on load; single-dive
+records are unchanged (backward compatible).
+
+Note the VPM-B caveat: only tissue loadings are carried between dives — the
+bubble state (crushing pressure, regenerated nuclei) starts fresh each dive,
+the standard simplification for VPM repetitive planning.
+
+**Surface-interval desaturation factor** (`state.surfaceDesatMult`, **UI default
+0.75**, the SI DESAT × field in Deco Settings): passed to `surfaceInterval()` as
+`opts.desatMult`. It divides the elimination half-time only for compartments
+that are off-gassing at the surface (Bühlmann pulmonary shunt). 1.0 is standard
+symmetric ZH-L16 — identical to Subsurface's `buehlmann_config.desatmult`
+default; **0.75 reproduces DecoPlanner's repetitive-dive schedules** (slower
+off-gassing → more residual load → longer next-dive deco) and is the app's
+default so multi-dive plans match DecoPlanner out of the box. (The *engine*
+helper `surfaceInterval` still defaults `desatMult` to 1.0 — the contract-level
+default stays plain ZH-L16; only the UI opts into 0.75.) Plan-wide, applied to
+every surface interval in the chain; it never affects dive 1 (no interval before
+it). Persisted at top level, not in per-dive snapshots.
 
 ### Cylinder / gas-supply planning is UI-only
 

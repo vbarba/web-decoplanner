@@ -421,5 +421,21 @@ const ref = VPMB.plan(baseInput());
 })();
 
 // ---------------------------------------------------------------------------
+// Repetitive dives: initialTissues seeding (tissue loadings only; the bubble
+// state starts fresh each dive — see the validate() comment in vpmb.js).
+// ---------------------------------------------------------------------------
+(function () {
+  const first = VPMB.plan(baseInput());
+  check('repetitive: first dive ok with 16 finalTissues',
+    first.ok && Array.isArray(first.finalTissues) && first.finalTissues.length === 16);
+  const backIn = VPMB.plan(baseInput({ initialTissues: first.finalTissues }));
+  check('repetitive: immediate repeat has more deco than a fresh dive',
+    backIn.ok && backIn.totalDecoTime > first.totalDecoTime + 1,
+    'fresh=' + first.totalDecoTime.toFixed(1) + ' repeat=' + backIn.totalDecoTime.toFixed(1));
+  const bad = VPMB.plan(baseInput({ initialTissues: [{ pN2: 1 }] }));
+  check('repetitive: wrong-length initialTissues rejected', !bad.ok);
+})();
+
+// ---------------------------------------------------------------------------
 console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
 process.exit(failures === 0 ? 0 : 1);
