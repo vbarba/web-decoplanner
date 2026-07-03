@@ -125,7 +125,11 @@ jobs:
           # [skip release] keeps this from looping if a PAT is ever introduced.
           git commit -m "chore(release): ${{ steps.decide.outputs.tag }} [skip release]"
           git tag "${{ steps.decide.outputs.tag }}"
-          git push origin HEAD:main --follow-tags
+          # Push the branch AND the tag explicitly (as two refspecs in one push,
+          # so it is atomic and order-independent). --follow-tags only pushes
+          # ANNOTATED tags reachable from the pushed commits; this lightweight
+          # tag was silently left behind once, which broke `gh release create`.
+          git push origin HEAD:main "refs/tags/${{ steps.decide.outputs.tag }}"
 
       - name: Create GitHub Release (notes from changelog)
         if: github.event_name == 'push' && steps.decide.outputs.released == 'true'
@@ -158,7 +162,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
