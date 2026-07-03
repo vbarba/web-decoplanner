@@ -439,21 +439,61 @@ const ref = DecoEngine.plan(baseInput());
 // EAN50 + O2, GF 50/80, last stop 6 m). Independently re-derived from the
 // engine's verified primitives during review; loose range checks alone would
 // let GF-ladder convention regressions (slope anchor, leave criterion) slip
-// through as a few extra minutes. These reflect the strict-Baker hold-every-rung
-// ladder: every 3 m rung from the first stop (18 m) down to lastStop is visited
-// and held >= minStopTime (see docs/DECISIONS.md "ZHL-16 holds every rung").
+// through as a few extra minutes. These reflect the hold-every-rung ladder:
+// every 3 m rung from the first stop (15 m under the dynamic-ceiling first-stop
+// rule) down to lastStop is visited and held, with stop ends on whole-minute
+// RUNTIME boundaries (Baker/DecoPlanner runtime rounding; see
+// docs/DECISIONS.md "ZHL-16 holds every rung" / "dynamic-ceiling first stop"
+// / "runtime rounding").
 // ---------------------------------------------------------------------------
 (function () {
   const r = DecoEngine.plan(baseInput());
-  check('golden: reference stops exactly [18/1, 15/1, 12/1, 9/2, 6/12]',
-    r.ok && JSON.stringify(r.stops.map(s => [s.depth, s.time])) === '[[18,1],[15,1],[12,1],[9,2],[6,12]]',
+  check('golden: reference stops exactly [15/1, 12/2, 9/3, 6/13]',
+    r.ok && JSON.stringify(r.stops.map(s => [s.depth, s.time])) === '[[15,1],[12,2],[9,3],[6,13]]',
     JSON.stringify(r.stops.map(s => [s.depth, s.time])));
-  check('golden: reference runtime 49.0', r.ok && Math.abs(r.totalRuntime - 49.0) < 0.05,
+  check('golden: reference runtime 48.67', r.ok && Math.abs(r.totalRuntime - 48.667) < 0.05,
     'runtime=' + r.totalRuntime);
-  check('golden: reference deco time 20', r.ok && Math.abs(r.totalDecoTime - 20) < 0.05,
+  check('golden: reference deco time 19.33', r.ok && Math.abs(r.totalDecoTime - 19.333) < 0.05,
     'deco=' + r.totalDecoTime);
-  check('golden: reference first stop 18 m', r.ok && r.firstStopDepth === 18,
+  check('golden: reference first stop 15 m (dynamic ceiling)', r.ok && r.firstStopDepth === 15,
     'firstStop=' + r.firstStopDepth);
+  check('golden: every stop ends on a whole-minute runtime',
+    r.ok && r.stops.every(s => Math.abs(s.runtime - Math.round(s.runtime)) < 1e-6),
+    JSON.stringify(r.stops.map(s => s.runtime)));
+})();
+
+// ---------------------------------------------------------------------------
+// DecoPlanner parity reference (GUE DecoPlanner 4, ZH-L16B, GF 20/85):
+// 45 m / 30 min on 21/35, EAN50 at <= 21 m, last stop 6 m, descent 10 m/min,
+// ascent 9 m/min, no gas-switch hold, salt, 1.013 bar. DecoPlanner's table:
+// 24/1 21/1 18/1 15/2 12/2 9/3 6/20 with stop-end runtimes
+// 33/34/35/37/39/42/62 and 63 min total (DP rounds the displayed total up;
+// the exact surfacing time is 62 + 6/9 = 62.67). Pinned end-to-end: the
+// dynamic-ceiling first stop AND the runtime-rounding convention must both
+// hold for this to match.
+// ---------------------------------------------------------------------------
+(function () {
+  const r = DecoEngine.plan({
+    algorithm: 'ZHL16B', gfLow: 20, gfHigh: 85, lastStopDepth: 6,
+    descentRate: 10, ascentRate: 9, gasSwitchStopTime: 0,
+    surfacePressure: 1.013, water: 'salt', ppO2MaxDeco: 1.61,
+    segmentTimesIncludeTravel: true,
+    gases: [
+      { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom' },
+      { id: 'ean50', fO2: 0.50, fHe: 0, type: 'deco' },
+    ],
+    segments: [{ depth: 45, time: 30, gasId: 'tx2135' }],
+  });
+  check('DecoPlanner parity: stops exactly 24/1 21/1 18/1 15/2 12/2 9/3 6/20',
+    r.ok && JSON.stringify(r.stops.map(s => [s.depth, s.time])) ===
+      '[[24,1],[21,1],[18,1],[15,2],[12,2],[9,3],[6,20]]',
+    JSON.stringify(r.stops.map(s => [s.depth, s.time])));
+  check('DecoPlanner parity: stop-end runtimes 33/34/35/37/39/42/62',
+    r.ok && JSON.stringify(r.stops.map(s => Math.round(s.runtime))) === '[33,34,35,37,39,42,62]' &&
+      r.stops.every(s => Math.abs(s.runtime - Math.round(s.runtime)) < 1e-6),
+    JSON.stringify(r.stops.map(s => s.runtime)));
+  check('DecoPlanner parity: total runtime 62.67 (DP displays 63)',
+    r.ok && Math.abs(r.totalRuntime - (62 + 6 / 9)) < 0.05, 'runtime=' + r.totalRuntime);
 })();
 
 // ---------------------------------------------------------------------------
@@ -570,8 +610,8 @@ const ref = DecoEngine.plan(baseInput());
   check('ZHL16B schedule differs from ZHL16C on the reference dive',
     stops(b) !== stops(c) || b.totalDecoTime !== c.totalDecoTime);
   // Golden values (deterministic; read off a real run).
-  check('ZHL16C golden stops on reference dive', stops(c) === '[[18,1],[15,1],[12,1],[9,2],[6,12]]', stops(c));
-  check('ZHL16B golden stops on reference dive', stops(b) === '[[18,1],[15,1],[12,1],[9,2],[6,11]]', stops(b));
+  check('ZHL16C golden stops on reference dive', stops(c) === '[[15,1],[12,2],[9,3],[6,13]]', stops(c));
+  check('ZHL16B golden stops on reference dive', stops(b) === '[[15,1],[12,2],[9,3],[6,12]]', stops(b));
 
   // Default path: an input WITHOUT an algorithm field behaves exactly like
   // ZHL-16C (regression lock — the C default must stay byte-for-byte).
@@ -579,7 +619,7 @@ const ref = DecoEngine.plan(baseInput());
   delete noAlgo.algorithm;
   const r = DecoEngine.plan(noAlgo);
   check('absent algorithm defaults to ZHL16C behavior',
-    r.ok && r.algorithm === 'ZHL16C' && stops(r) === '[[18,1],[15,1],[12,1],[9,2],[6,12]]',
+    r.ok && r.algorithm === 'ZHL16C' && stops(r) === '[[15,1],[12,2],[9,3],[6,13]]',
     r.algorithm + ' ' + stops(r));
 })();
 
@@ -633,6 +673,10 @@ const ref = DecoEngine.plan(baseInput());
   //     rung from the first stop down to lastStop; the V-Planner/Subsurface
   //     skip-clear-rung optimization is NOT used). The contiguous deco region
   //     above lastStop must step down by exactly stopInterval with no gaps.
+  //     NB: the first-stop DEPTH uses the dynamic/continuous-ceiling rule
+  //     (Subsurface/DecoPlanner) — one rung shallower than Baker's static
+  //     round-up here (15 m, not 18 m). Holding every rung is unchanged. See
+  //     docs/DECISIONS.md "dynamic-ceiling first stop".
   const ref = DecoEngine.plan(baseInput({ segmentTimesIncludeTravel: false }));
   let contiguous = ref.stops.length >= 2;
   for (let i = 1; i < ref.stops.length; i++) {
@@ -640,8 +684,8 @@ const ref = DecoEngine.plan(baseInput());
   }
   check('hold-every-rung: deco ladder visits every 3 m rung with no gaps',
     contiguous, JSON.stringify(ref.stops.map(function (s) { return s.depth; })));
-  check('hold-every-rung: first stop = round-up GF-low ceiling (18 m on reference)',
-    ref.firstStopDepth === 18, 'firstStop=' + ref.firstStopDepth);
+  check('first stop = dynamic-ceiling rung (15 m on reference)',
+    ref.firstStopDepth === 15, 'firstStop=' + ref.firstStopDepth);
 
   // (d) DecoTengu reference (decotengu, ZH-L16B): 35 m / 40 min air, GF 30/85,
   //     last stop 3 m, ascent 10 m/min. Published ladder 18/15/12/9/6/3 with
@@ -663,6 +707,80 @@ const ref = DecoEngine.plan(baseInput());
   });
   check('DecoTengu reference stop minutes within +/-2 of 1/1/4/6/10/22',
     minutesOk, JSON.stringify(dt.stops.map(function (s) { return [s.depth, s.time]; })));
+})();
+
+// ---------------------------------------------------------------------------
+// Repetitive dives: initialTissues seeding + surfaceInterval() decay.
+// ---------------------------------------------------------------------------
+(function () {
+  const first = DecoEngine.plan(baseInput());
+  check('repetitive: first dive ok with finalTissues', first.ok && first.finalTissues.length === 16);
+
+  // Straight back in (SI 0): dive 2 must carry the residual load -> more deco.
+  const backIn = DecoEngine.plan(baseInput({ initialTissues: first.finalTissues }));
+  check('repetitive: immediate repeat has more deco than a fresh dive',
+    backIn.ok && backIn.totalDecoTime > first.totalDecoTime + 1,
+    'fresh=' + first.totalDecoTime.toFixed(1) + ' repeat=' + backIn.totalDecoTime.toFixed(1));
+
+  // Surface interval converges every compartment toward air saturation (fast
+  // compartments end BELOW saturation after O2-rich deco and climb back up;
+  // loaded slow compartments come down; helium always decays toward 0).
+  const si60 = DecoEngine.surfaceInterval(first.finalTissues, 60);
+  const si360 = DecoEngine.surfaceInterval(first.finalTissues, 360);
+  const sat = (1.013 - DecoEngine._internal.PH2O) * 0.79;
+  let converges = true;
+  for (let i = 0; i < 16; i++) {
+    if (Math.abs(si60[i].pN2 - sat) > Math.abs(first.finalTissues[i].pN2 - sat) + 1e-9) converges = false;
+    if (Math.abs(si360[i].pN2 - sat) > Math.abs(si60[i].pN2 - sat) + 1e-9) converges = false;
+    if (si60[i].pHe > first.finalTissues[i].pHe + 1e-9 || si360[i].pHe > si60[i].pHe + 1e-9) converges = false;
+  }
+  check('repetitive: surfaceInterval converges toward air saturation, He decays', converges);
+  check('repetitive: long SI approaches surface air saturation',
+    si360.every(function (t) { return Math.abs(t.pN2 - sat) < 0.15 && t.pHe < 0.05; }));
+
+  // Dive 2 after a real SI sits between "immediate repeat" and "fresh".
+  const after60 = DecoEngine.plan(baseInput({ initialTissues: si60 }));
+  check('repetitive: SI 60 dive deco between fresh and immediate repeat',
+    after60.ok && after60.totalDecoTime <= backIn.totalDecoTime + 1e-6 &&
+    after60.totalDecoTime >= first.totalDecoTime - 1e-6,
+    'fresh=' + first.totalDecoTime.toFixed(1) + ' si60=' + after60.totalDecoTime.toFixed(1) +
+    ' repeat=' + backIn.totalDecoTime.toFixed(1));
+
+  // Validation: malformed seeds are rejected, absent seed unchanged.
+  const bad = DecoEngine.plan(baseInput({ initialTissues: [{ pN2: 1 }] }));
+  check('repetitive: wrong-length initialTissues rejected', !bad.ok);
+  const bad2 = DecoEngine.plan(baseInput({ initialTissues: first.finalTissues.slice(0, 15).concat([{ pN2: -1 }]) }));
+  check('repetitive: negative pressure rejected', !bad2.ok);
+
+  // Surface-interval desaturation multiplier (Bühlmann pulmonary shunt, DP
+  // parity). desatMult=1 is the plain symmetric decay; desatMult<1 slows
+  // off-gassing so an off-gassing compartment retains MORE load, and the
+  // repetitive dive it seeds needs MORE deco. desatMult must never touch a
+  // compartment that is on-gassing at the surface.
+  const plain120 = DecoEngine.surfaceInterval(first.finalTissues, 120);
+  const plain120b = DecoEngine.surfaceInterval(first.finalTissues, 120, { desatMult: 1 });
+  check('desatMult: default equals desatMult=1 (backward compatible)',
+    plain120.every(function (t, i) {
+      return Math.abs(t.pN2 - plain120b[i].pN2) < 1e-12 && Math.abs(t.pHe - plain120b[i].pHe) < 1e-12;
+    }));
+  const shunt120 = DecoEngine.surfaceInterval(first.finalTissues, 120, { desatMult: 0.75 });
+  const satN2 = (1.013 - DecoEngine._internal.PH2O) * 0.79;
+  let offGasHigher = false, onGasUntouched = true;
+  for (let i = 0; i < 16; i++) {
+    if (first.finalTissues[i].pN2 > satN2) {           // this compartment off-gasses
+      if (shunt120[i].pN2 > plain120[i].pN2 + 1e-9) offGasHigher = true;
+    } else {                                            // on-gassing: must be identical
+      if (Math.abs(shunt120[i].pN2 - plain120[i].pN2) > 1e-9) onGasUntouched = false;
+    }
+    if (shunt120[i].pHe < plain120[i].pHe - 1e-9) onGasUntouched = false; // He only slower, never faster
+  }
+  check('desatMult<1 retains more N2 in off-gassing compartments', offGasHigher);
+  check('desatMult<1 leaves on-gassing N2 compartments untouched', onGasUntouched);
+  const repShunt = DecoEngine.plan(baseInput({ initialTissues: shunt120 }));
+  const repPlain = DecoEngine.plan(baseInput({ initialTissues: plain120 }));
+  check('desatMult<1 gives a repetitive dive at least as long as plain decay',
+    repShunt.ok && repPlain.ok && repShunt.totalDecoTime >= repPlain.totalDecoTime - 1e-6,
+    'plain=' + repPlain.totalDecoTime.toFixed(1) + ' shunt=' + repShunt.totalDecoTime.toFixed(1));
 })();
 
 // ---------------------------------------------------------------------------

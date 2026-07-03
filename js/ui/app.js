@@ -18,13 +18,12 @@
   // units (a display preference, not part of the dive) and the profile arrays
   // (segments/gases, stored alongside as their own fields).
   var SETTINGS_FIELDS = ['algorithm', 'gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure',
-    'water', 'descentRate', 'ascentRate', 'lastStopDepth', 'ppO2MaxDeco',
+    'water', 'descentRate', 'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'gasSwitchStopTime',
     'segmentTimesIncludeTravel', 'sacBottom', 'sacDeco', 'gasReserve', 'extraReserveBar', 'showTravel'];
   var M2FT = 3.28084;
   var L_PER_CUFT = 28.3168;
   var STOP_INTERVAL = 3;       // m — fixed per contract
   var MIN_STOP_TIME = 1;       // min
-  var GAS_SWITCH_STOP_TIME = 1;// min
   var PPO2_BOTTOM_DISPLAY = 1.4; // MOD readout for bottom gases
   var DEBOUNCE_MS = 300;
   var OFFLINE_MSG = 'DECO ENGINE OFFLINE — displaying demonstration data only. Do not dive this plan.';
@@ -93,11 +92,17 @@
       vpmConservatism: 2,
       surfacePressure: 1.013,
       water: 'salt',
-      descentRate: 18,
+      descentRate: 10,
       ascentRate: 9,
       lastStopDepth: 6,
       ppO2MaxDeco: 1.61,
+      gasSwitchStopTime: 1,
       segmentTimesIncludeTravel: true,
+      // Repetitive-dive surface-interval desaturation multiplier (Bühlmann
+      // pulmonary shunt). 1 = symmetric ZH-L16 (= Subsurface default); 0.75
+      // reproduces DecoPlanner and is the default here. Only affects multi-dive
+      // plans (dives after a surface interval).
+      surfaceDesatMult: 0.75,
       sacBottom: 20,
       sacDeco: 16,
       gasReserve: 'mingas',
@@ -109,7 +114,14 @@
       gases: [
         { id: 'tx2135', fO2: 0.21, fHe: 0.35, type: 'bottom', cyl: 'd2x12', startBar: 232 },
         { id: 'ean50',  fO2: 0.50, fHe: 0.00, type: 'deco',   cyl: 's80',  startBar: 207 }
-      ]
+      ],
+      // Repetitive dives: dives[i] = { si, dive } where `dive` is a saved-dive
+      // snapshot ({settings, segments, gases}) and `si` is the surface interval
+      // in minutes BEFORE that dive (ignored for dive 1). The top-level state
+      // is always the ACTIVE dive's working copy, mirrored into
+      // dives[activeDive] by syncActiveDive().
+      dives: [],
+      activeDive: 0
     };
   }
 
@@ -232,6 +244,7 @@
      Persistence
   ---------------------------------------------------------- */
   function saveState() {
+    syncActiveDive();   // keep the active tab's record in step with the form
     try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* private mode */ }
   }
   function loadState() {
@@ -247,8 +260,8 @@
     });
     if (typeof s.lang === 'string' || s.lang === null) d.lang = s.lang;
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
-     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar',
-     'matrixStart', 'matrixEnd', 'matrixStep']
+     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'gasSwitchStopTime', 'sacBottom', 'sacDeco', 'extraReserveBar',
+     'surfaceDesatMult', 'matrixStart', 'matrixEnd', 'matrixStep']
       .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
     if (typeof s.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = s.segmentTimesIncludeTravel;
     if (typeof s.showTravel === 'boolean') d.showTravel = s.showTravel;
@@ -278,6 +291,18 @@
       if (segs.length) d.segments = segs;
     }
     if (d.units !== 'metric' && d.units !== 'imperial') d.units = 'metric';
+    // Repetitive-dive records (absent in plans saved before multi-dive existed).
+    if (Array.isArray(s.dives)) {
+      d.dives = s.dives.filter(function (r) {
+        return r && r.dive && typeof r.dive === 'object';
+      }).map(function (r) {
+        return { si: (typeof r.si === 'number' && isFinite(r.si) && r.si >= 0) ? r.si : 60, dive: r.dive };
+      });
+    }
+    if (d.dives.length) {
+      var ai = (typeof s.activeDive === 'number') ? Math.round(s.activeDive) : 0;
+      d.activeDive = Math.min(Math.max(0, ai), d.dives.length - 1);
+    }
     coerceState(d);
     state = d;
   }
@@ -289,6 +314,7 @@
     if (s.algorithm !== 'ZHL16C' && s.algorithm !== 'ZHL16B' && s.algorithm !== 'VPMB') s.algorithm = 'ZHL16C';
     if (s.water !== 'salt' && s.water !== 'fresh') s.water = 'salt';
     if (s.lastStopDepth !== 3 && s.lastStopDepth !== 6) s.lastStopDepth = 6;
+    if (!(s.surfaceDesatMult > 0 && s.surfaceDesatMult <= 1)) s.surfaceDesatMult = 0.75;
     if (!RESERVE_RULES[s.gasReserve]) s.gasReserve = 'thirds';
     if (Array.isArray(s.gases)) {
       s.gases.forEach(function (g) {
@@ -334,18 +360,52 @@
     };
   }
 
+  // Mirror the active dive's working copy into its state.dives record (no-op
+  // for a plain single-dive plan, where state.dives is empty).
+  function syncActiveDive() {
+    if (!state.dives.length) return;
+    var rec = state.dives[state.activeDive];
+    state.dives[state.activeDive] = { si: rec ? rec.si : 0, dive: snapshotCurrentDive() };
+  }
+
+  // Full plan snapshot for SAVED dives: the active dive plus — when the plan
+  // is repetitive — the whole dive sequence with its surface intervals.
+  function snapshotPlan() {
+    syncActiveDive();
+    var snap = snapshotCurrentDive();
+    if (state.dives.length > 1) {
+      snap.dives = state.dives.map(function (r) { return { si: r.si, dive: r.dive }; });
+      snap.activeDive = state.activeDive;
+    }
+    return snap;
+  }
+
   // Restore a saved dive onto `state`, defensively (mirrors loadState validation).
-  // Leaves state.units untouched — units are a display preference, not part of the dive.
+  // Leaves state.units and state.lang untouched — display preferences, not part
+  // of the dive. A record carrying a `dives` array (multi-dive plan) restores
+  // the whole repetitive sequence.
   function applyDive(dive) {
     if (!dive || typeof dive !== 'object') return;
     var d = defaults();
     d.units = state.units;
+    d.lang = state.lang;
+    if (Array.isArray(dive.dives) && dive.dives.length) {
+      d.dives = dive.dives.filter(function (r) {
+        return r && r.dive && typeof r.dive === 'object';
+      }).map(function (r) {
+        return { si: (typeof r.si === 'number' && isFinite(r.si) && r.si >= 0) ? r.si : 60, dive: r.dive };
+      });
+      if (d.dives.length) {
+        var ai = (typeof dive.activeDive === 'number') ? Math.round(dive.activeDive) : 0;
+        d.activeDive = Math.min(Math.max(0, ai), d.dives.length - 1);
+      }
+    }
     var src = dive.settings || {};
     ['algorithm', 'water', 'gasReserve'].forEach(function (k) {
       if (typeof src[k] === 'string') d[k] = src[k];
     });
     ['gfLow', 'gfHigh', 'vpmConservatism', 'surfacePressure', 'descentRate',
-     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'sacBottom', 'sacDeco', 'extraReserveBar']
+     'ascentRate', 'lastStopDepth', 'ppO2MaxDeco', 'gasSwitchStopTime', 'sacBottom', 'sacDeco', 'extraReserveBar']
       .forEach(function (k) { if (typeof src[k] === 'number' && isFinite(src[k])) d[k] = src[k]; });
     if (typeof src.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = src.segmentTimesIncludeTravel;
     if (typeof src.showTravel === 'boolean') d.showTravel = src.showTravel;
@@ -370,6 +430,7 @@
     coerceState(d);
     if (!hasVPM && d.algorithm === 'VPMB') d.algorithm = 'ZHL16C';
     state = d;
+    invalidateCarry();
   }
 
   // Upsert by name (newest wins), persist, refresh the list UI.
@@ -377,7 +438,7 @@
     name = (name || '').trim();
     if (!name) return false;
     var list = loadDives();
-    var rec = { name: name, ts: Date.now(), dive: snapshotCurrentDive() };
+    var rec = { name: name, ts: Date.now(), dive: snapshotPlan() };
     var idx = -1;
     for (var i = 0; i < list.length; i++) { if (list[i].name === name) { idx = i; break; } }
     if (idx >= 0) list[idx] = rec; else list.push(rec);
@@ -446,31 +507,132 @@
   /* ----------------------------------------------------------
      Build the exact contract input object
   ---------------------------------------------------------- */
-  function buildInput() {
+  // Snapshot ({settings, segments, gases}) -> engine input. Used both for the
+  // active dive (via buildInput) and for the previous dives of a repetitive
+  // chain (carriedTissues).
+  function buildInputFor(dive) {
+    var s = dive.settings || {};
     return {
-      algorithm: state.algorithm,
-      gfLow: Math.round(state.gfLow),
-      gfHigh: Math.round(state.gfHigh),
-      vpmConservatism: Math.round(state.vpmConservatism),
-      surfacePressure: state.surfacePressure,
-      water: state.water,
-      descentRate: state.descentRate,
-      ascentRate: state.ascentRate,
+      algorithm: s.algorithm,
+      gfLow: Math.round(s.gfLow),
+      gfHigh: Math.round(s.gfHigh),
+      vpmConservatism: Math.round(s.vpmConservatism),
+      surfacePressure: s.surfacePressure,
+      water: s.water,
+      descentRate: s.descentRate,
+      ascentRate: s.ascentRate,
       stopInterval: STOP_INTERVAL,
-      lastStopDepth: state.lastStopDepth,
+      lastStopDepth: s.lastStopDepth,
       minStopTime: MIN_STOP_TIME,
-      gasSwitchStopTime: GAS_SWITCH_STOP_TIME,
-      ppO2MaxDeco: state.ppO2MaxDeco,
-      segmentTimesIncludeTravel: state.segmentTimesIncludeTravel,
-      segments: state.segments.map(function (s) {
-        return { depth: s.depth, time: s.time, gasId: s.gasId };
+      gasSwitchStopTime: s.gasSwitchStopTime,
+      ppO2MaxDeco: s.ppO2MaxDeco,
+      segmentTimesIncludeTravel: s.segmentTimesIncludeTravel,
+      segments: (dive.segments || []).map(function (sg) {
+        return { depth: sg.depth, time: sg.time, gasId: sg.gasId };
       }),
-      gases: state.gases.map(function (g) {
+      gases: (dive.gases || []).map(function (g) {
         return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type };
       }),
-      sacBottom: state.sacBottom,
-      sacDeco: state.sacDeco
+      sacBottom: s.sacBottom,
+      sacDeco: s.sacDeco
     };
+  }
+
+  function buildInput() {
+    var input = buildInputFor(snapshotCurrentDive());
+    var carry = carriedTissues();
+    if (carry.tissues) input.initialTissues = carry.tissues;
+    return input;
+  }
+
+  /* ----------------------------------------------------------
+     Repetitive dives — tissue carry-over chain
+     Dives 1..k-1 are re-planned (each with its own settings and engine) and
+     the final tissue state, decayed through each surface interval with
+     DecoEngine.surfaceInterval(), seeds dive k as input.initialTissues.
+     Cached until a dive/SI structure change (editing the ACTIVE dive never
+     changes what was carried INTO it).
+  ---------------------------------------------------------- */
+  var carryCache = { dirty: true, tissues: null, error: null };
+  function invalidateCarry() { carryCache.dirty = true; }
+
+  function carriedTissues() {
+    if (!carryCache.dirty) return carryCache;
+    carryCache.dirty = false;
+    carryCache.tissues = null;
+    carryCache.error = null;
+    if (state.activeDive < 1 || !state.dives.length || !hasEngine) return carryCache;
+    syncActiveDive();
+    var tissues = null;
+    for (var i = 0; i < state.activeDive; i++) {
+      var rec = state.dives[i];
+      var input = buildInputFor(rec.dive);
+      if (tissues) input.initialTissues = tissues;
+      var res = runActive(input);
+      if (!res || !res.ok || !res.finalTissues || res.finalTissues.length !== 16) {
+        carryCache.error = 'dive ' + (i + 1) + ' cannot be planned' +
+          (res && res.errors && res.errors.length ? ' (' + res.errors[0] + ')' : '') +
+          ' — fix it before planning dive ' + (state.activeDive + 1);
+        return carryCache;
+      }
+      var next = state.dives[i + 1];
+      var si = (next && typeof next.si === 'number' && next.si >= 0) ? next.si : 0;
+      var st = rec.dive.settings || {};
+      tissues = window.DecoEngine.surfaceInterval(res.finalTissues, si, {
+        surfacePressure: st.surfacePressure, water: st.water,
+        desatMult: state.surfaceDesatMult   // plan-wide shunt factor
+      });
+    }
+    carryCache.tissues = tissues;
+    return carryCache;
+  }
+
+  // Ensure the tab records exist (a plain plan lazily becomes dive 1).
+  function ensureDiveRecords() {
+    if (!state.dives.length) {
+      state.dives = [{ si: 0, dive: snapshotCurrentDive() }];
+      state.activeDive = 0;
+    }
+  }
+
+  function afterDiveStructureChange() {
+    invalidateCarry();
+    renderRail();
+    saveState();
+    applyValidation();
+    runPlan(true);
+  }
+
+  function switchDive(idx) {
+    ensureDiveRecords();
+    if (idx < 0 || idx >= state.dives.length || idx === state.activeDive) return;
+    syncActiveDive();
+    var dives = state.dives;
+    applyDive(dives[idx].dive);          // replaces `state`, keeps units/lang
+    state.dives = dives;
+    state.activeDive = idx;
+    afterDiveStructureChange();
+  }
+
+  function addDive() {
+    ensureDiveRecords();
+    syncActiveDive();
+    var last = state.dives[state.dives.length - 1];
+    // New dive: a deep copy of the last dive's plan, 60 min interval by default.
+    state.dives.push({ si: 60, dive: JSON.parse(JSON.stringify(last.dive)) });
+    switchDive(state.dives.length - 1);
+  }
+
+  function removeActiveDive() {
+    if (state.dives.length < 2) return;
+    var dives = state.dives;
+    dives.splice(state.activeDive, 1);
+    if (dives.length === 1) dives[0].si = 0;
+    var target = Math.min(state.activeDive, dives.length - 1);
+    applyDive(dives[target].dive);
+    state.dives = dives;
+    state.activeDive = target;
+    afterDiveStructureChange();
   }
 
   /* ==========================================================
@@ -680,6 +842,7 @@
     if (!(state.ascentRate >= 1 && state.ascentRate <= 30)) bad('ascentRate', 'Ascent rate must be ' + rateOut(1) + '–' + rateOut(30) + ' ' + rateUnit());
     if (!(state.surfacePressure >= 0.5 && state.surfacePressure <= 1.2)) bad('surfacePressure', 'Surface pressure must be 0.5–1.2 bar');
     if (!(state.ppO2MaxDeco >= 0.4 && state.ppO2MaxDeco <= 2)) bad('ppO2MaxDeco', 'Deco ppO₂ limit must be 0.4–2.0 bar');
+    if (!(state.gasSwitchStopTime >= 0 && state.gasSwitchStopTime <= 5)) bad('gasSwitchStopTime', 'Gas switch stop time must be 0–5 min');
     if (!(state.sacBottom >= 1 && state.sacBottom <= 100)) bad('sacBottom', 'Bottom SAC out of range');
     if (!(state.sacDeco >= 1 && state.sacDeco <= 100)) bad('sacDeco', 'Deco SAC out of range');
     if (!(state.extraReserveBar >= 0 && state.extraReserveBar <= 300)) bad('extraReserveBar', 'Extra reserve must be 0–300 bar');
@@ -974,6 +1137,8 @@
     $('set-ascent').value = rateOut(state.ascentRate);
     $('set-sp').value = state.surfacePressure;
     $('set-ppo2').value = state.ppO2MaxDeco;
+    $('set-gas-switch').value = state.gasSwitchStopTime;
+    $('set-desat').value = state.surfaceDesatMult;
     $('set-sac-bottom').value = sacOut(state.sacBottom);
     $('set-sac-deco').value = sacOut(state.sacDeco);
     $('set-extra-reserve').value = pressOut(state.extraReserveBar);
@@ -1038,6 +1203,7 @@
   }
 
   function renderRail() {
+    renderDiveTabs();
     renderSegments();
     renderGases();
     renderAlgo();
@@ -1046,6 +1212,45 @@
     renderBadge();
     var rsv = $('gas-reserve');
     if (rsv) rsv.value = state.gasReserve;
+  }
+
+  // Repetitive-dive tab strip + the surface-interval field (dives >= 2).
+  function renderDiveTabs() {
+    var el = $('dive-tabs');
+    if (!el) return;
+    clear(el);
+    var n = Math.max(1, state.dives.length);
+    var seg = mk('div', 'seg-control dive-seg');
+    for (var i = 0; i < n; i++) {
+      var b = mk('button', i === state.activeDive ? 'active' : null,
+        tr('dive.tab') + ' ' + (i + 1));
+      b.type = 'button';
+      b.setAttribute('data-dive-tab', i);
+      b.setAttribute('aria-pressed', i === state.activeDive ? 'true' : 'false');
+      seg.appendChild(b);
+    }
+    el.appendChild(seg);
+    var add = mk('button', 'ghost-btn', '+');
+    add.type = 'button';
+    add.id = 'dive-add-btn';
+    add.title = tr('dive.add');
+    add.setAttribute('aria-label', tr('dive.add'));
+    el.appendChild(add);
+    if (n > 1) {
+      var del = mk('button', 'icon-btn', '✕');
+      del.type = 'button';
+      del.id = 'dive-remove-btn';
+      del.title = tr('dive.remove');
+      del.setAttribute('aria-label', tr('dive.remove'));
+      el.appendChild(del);
+    }
+    var siRow = $('si-row');
+    if (siRow) {
+      siRow.hidden = !(state.activeDive > 0);
+      var si = $('set-si');
+      var rec = state.dives[state.activeDive];
+      if (si && rec) si.value = rec.si;
+    }
   }
 
   /* ----------------------------------------------------------
@@ -1133,6 +1338,12 @@
   function runPlan(animate) {
     var v = applyValidation();
     if (v.errors.length) return;
+    var carry = carriedTissues();
+    if (carry.error) {
+      lastResult = { ok: false, errors: ['Repetitive plan: ' + carry.error], warnings: [] };
+      renderResults(lastResult, false);
+      return;
+    }
     var input = buildInput();
     var result;
     var usedMock = false;
@@ -1611,7 +1822,12 @@
      and the COPY is tab-separated so it pastes cleanly into a spreadsheet. */
 
   function tr(key) {
-    return hasI18n ? window.I18N.t(key) : key;
+    // Keep I18N's current language in step with the app's choice — t() reads
+    // I18N's internal `current`, which otherwise only applyI18n() updates
+    // (dynamic labels rendered before/without applyI18n got the wrong language).
+    if (!hasI18n) return key;
+    window.I18N.setLang(activeLang());
+    return window.I18N.t(key);
   }
 
   // Index of the deepest segment in an input (the bottom phase).
@@ -1978,6 +2194,25 @@
   }
 
   function bindEvents() {
+    // --- repetitive-dive tabs (delegated; buttons are rebuilt per render)
+    $('dive-tabs').addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (t.id === 'dive-add-btn') { addDive(); return; }
+      if (t.id === 'dive-remove-btn') { removeActiveDive(); return; }
+      var tab = t.closest ? t.closest('[data-dive-tab]') : null;
+      if (tab) switchDive(parseInt(tab.getAttribute('data-dive-tab'), 10));
+    });
+    var siInput = $('set-si');
+    if (siInput) {
+      siInput.addEventListener('input', function () {
+        if (state.activeDive < 1 || !state.dives[state.activeDive]) return;
+        var v = num(this.value);
+        state.dives[state.activeDive].si = isFinite(v) && v >= 0 ? v : 0;
+        invalidateCarry();
+        onStateChanged();
+      });
+    }
+
     // --- segments (delegated)
     $('segments-body').addEventListener('input', function (ev) {
       var t = ev.target;
@@ -2137,6 +2372,13 @@
     $('set-ascent').addEventListener('input', function () { state.ascentRate = rateIn(this.value); onStateChanged(); });
     $('set-sp').addEventListener('input', function () { state.surfacePressure = num(this.value); onStateChanged({ refreshGas: true }); });
     $('set-ppo2').addEventListener('input', function () { state.ppO2MaxDeco = num(this.value); onStateChanged({ refreshGas: true }); });
+    $('set-gas-switch').addEventListener('input', function () { state.gasSwitchStopTime = num(this.value); onStateChanged(); });
+    $('set-desat').addEventListener('input', function () {
+      var v = num(this.value);
+      state.surfaceDesatMult = (isFinite(v) && v > 0 && v <= 1) ? v : 1;
+      invalidateCarry();   // changes what previous dives carry into the active one
+      onStateChanged();
+    });
     $('set-sac-bottom').addEventListener('input', function () { state.sacBottom = sacIn(this.value); onStateChanged(); });
     $('set-sac-deco').addEventListener('input', function () { state.sacDeco = sacIn(this.value); onStateChanged(); });
     // Extra reserve is presentation-only (doesn't change the deco plan): update
@@ -2216,6 +2458,7 @@
       state = defaults();
       state.units = units;
       state.lang = lang;
+      invalidateCarry();
       if (!hasVPM && state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
       renderRail();
       saveState();

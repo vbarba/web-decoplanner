@@ -53,6 +53,13 @@
 
       <section class="panel" aria-labelledby="dive-title">
         <h2 class="panel-title" id="dive-title" data-i18n="box.dive" data-i18n-title="tip.dive" title="The depth/time profile of your dive — each level is a depth held for a number of minutes on a chosen gas.">Dive</h2>
+        <!-- Repetitive-dive tabs: residual tissue load from each dive is carried
+             through the surface interval into the next (see docs/ARCHITECTURE.md). -->
+        <div class="dive-tabs" id="dive-tabs" role="tablist" aria-label="Dives"></div>
+        <div class="settings-grid si-grid" id="si-row" hidden>
+          <label for="set-si" data-i18n-title="tipf.surfaceInterval" title="Surface interval before this dive — minutes breathing air at the surface since the previous dive. Residual tissue load from the previous dive is carried into this plan."><span data-i18n="field.surfaceInterval">SURFACE INTERVAL</span> <span class="unit">min</span></label>
+          <input type="number" id="set-si" class="num-input" data-vkey="surfaceInterval" min="0" max="2880" step="5" inputmode="numeric">
+        </div>
         <table class="seg-table">
           <thead>
             <tr>
@@ -139,6 +146,12 @@
 
           <label for="set-ppo2" data-i18n-title="tipf.ppo2deco" title="Maximum ppO₂ allowed on deco gas; sets each deco gas’s switch depth (MOD)."><span data-i18n="field.ppo2deco">ppO&#8322; DECO</span> <span class="unit">bar</span></label>
           <input type="number" id="set-ppo2" class="num-input" data-vkey="ppO2MaxDeco" min="0.4" max="2" step="0.01" inputmode="decimal">
+
+          <label for="set-gas-switch" data-i18n-title="tipf.gasSwitchStop" title="Hold time when switching to a deco gas. Set 0 for no switch stop."><span data-i18n="field.gasSwitchStop">GAS SWITCH STOP</span> <span class="unit">min</span></label>
+          <input type="number" id="set-gas-switch" class="num-input" data-vkey="gasSwitchStopTime" min="0" max="5" step="1" inputmode="numeric">
+
+          <label for="set-desat" data-i18n-title="tipf.surfaceDesat" title="Surface-interval desaturation factor (Bühlmann pulmonary shunt) for repetitive dives. 1.00 = standard symmetric ZH-L16 (= Subsurface); 0.75 slows off-gassing to match DecoPlanner. Only affects dives after a surface interval."><span data-i18n="field.surfaceDesat">SI DESAT ×</span></label>
+          <input type="number" id="set-desat" class="num-input" data-vkey="surfaceDesatMult" min="0.5" max="1" step="0.01" inputmode="decimal">
 
           <label class="check-row" for="set-incl-travel" data-i18n-title="tipf.inclTravel" title="When on, a level’s time counts the descent/ascent travel into that level; when off, it is pure bottom time at depth.">
             <input type="checkbox" id="set-incl-travel">

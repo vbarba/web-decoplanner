@@ -3,6 +3,92 @@
 Notable choices and the reasoning behind them, so they aren't relitigated or
 accidentally undone. Newest first.
 
+## Surface-interval desaturation factor (Bühlmann pulmonary shunt / DecoPlanner parity)
+
+Default repetitive-dive off-gassing is **plain symmetric ZH-L16** (same half-time
+for uptake and elimination). This matches Subsurface, whose `core/deco.c` ships
+`buehlmann_config.desatmult = 1.0` — the pulmonary-shunt hook exists but is
+disabled. DecoPlanner instead **slows desaturation** during the surface interval
+(Bühlmann's pulmonary-shunt model, confirmed in GUE/DecoPlanner material), so it
+retains more residual load and gives longer repetitive-dive deco.
+
+`surfaceInterval(tissues, minutes, {desatMult})` gained `desatMult` (default 1):
+it divides the elimination half-time **only for off-gassing compartments** (tissue
+above the surface inspired pressure), mirroring Subsurface's `desatmult`. Exposed
+as `state.surfaceDesatMult` (SI DESAT × field). **Calibrated value:
+`desatMult = 0.75` reproduces DecoPlanner exactly** on the reference dive
+(48 m/25 min 18/45 + EAN50, GF 20/85, ZH-L16B, SI 120 min → last stop 6/29,
+total ~69). The exact DP constant is not published; 0.75 is an empirical fit to
+DP output AND coincides with the classic ~25%-shunt physiological interpretation.
+The **UI defaults to 0.75** (maintainer choice — DecoPlanner is the reference
+tool, so repetitive plans match it out of the box); users can set 1.00 for plain
+Subsurface-style symmetric decay. The **engine** helper `surfaceInterval` keeps
+`desatMult` defaulting to 1.0, so the contract-level default and every engine
+test stay plain ZH-L16 — only the app opts into 0.75. Sources: Subsurface
+`core/deco.c` (`desatmult`), GUE DecoPlanner repetitive-dive (pulmonary shunt)
+material.
+
+## Repetitive dives: UI-orchestrated tissue carry-over, engines gain `initialTissues`
+
+Multi-dive plans (DecoPlanner's "Next dive") were added. The engine contract
+gained one optional input — `initialTissues` (16 × `{pN2,pHe}` bar, the
+`finalTissues` shape) — plus a `DecoEngine.surfaceInterval(tissues, minutes,
+opts)` helper that off-gasses on air at the surface. Everything else lives in
+`app.js`: a Dive-panel tab strip, per-dive snapshots in `state.dives[i] =
+{si, dive}` (reusing the saved-dive snapshot/apply machinery), and
+`carriedTissues()` which re-plans dives 1..k−1 in order and feeds each result's
+decayed `finalTissues` into the next dive. Per-dive EVERYTHING (settings, gases,
+segments) is snapshotted — dives in a sequence may use different engines.
+Trade-off recorded: VPM-B carries only tissue loadings between dives; the bubble
+state (crushing, regenerated nuclei) starts fresh each dive — the standard
+simplification for VPM repetitive planning. Saved dives store the whole sequence
+(`dive.dives`) when the plan is repetitive; old single-dive records still load.
+
+## Stop times use Baker's runtime rounding (exact DecoPlanner stop parity)
+
+`computeStopMinutes` (whole minutes held *from arrival*, fractional runtimes)
+was replaced by `computeStopHold`: the stop ends on a whole multiple of
+`minStopTime` of RUNTIME (fractional lead-in absorbs the inbound ascent leg,
+then whole increments until the next rung clears), mirrored in VPM-B. This is
+Baker's actual `DECOMPRESSION_STOP` behavior AND what DecoPlanner does — with
+the dynamic first stop (below) it makes HALDANE reproduce DecoPlanner's table
+exactly on the comparison dive (24/1 21/1 18/1 15/2 12/2 9/3 6/20, runtimes
+33…62, pinned in `tests/zhl16.test.js`). `stops[].time` is the DP-style
+integer; `table` stop rows keep the true fractional hold so gas/CNS/OTU math
+stays exact. Full detail in
+[BAKER-GF-COMPLIANCE.md](./BAKER-GF-COMPLIANCE.md) ("Stop times: runtime
+rounding").
+
+## ZHL-16 first stop now uses a dynamic ceiling (DecoPlanner/Subsurface parity)
+
+The ZHL first-stop **depth** rule was changed from Baker's **static round-up** to a
+**dynamic / continuous ceiling** (the Subsurface `core/deco.cpp` family that GUE
+DecoPlanner shares). **This reverses a prior decision** — round-up was previously
+kept for strict Baker compliance and a request to match DecoPlanner was rejected.
+
+Why reversed: the user's reference tool is DecoPlanner, and on the canonical
+comparison dive (45 m / 30 min, 21/35, EAN50, GF 20/85, ZH-L16B) HALDANE put the
+first stop at **27 m** while DecoPlanner put it at **24 m**. The gap is purely the
+first-stop convention: Baker rounds the *static* bottom ceiling (24.81 m) **up** to
+27 m; the dynamic rule walks the ascent and finds the diver off-gasses enough to
+reach **24 m** before the ceiling blocks the next rung. `firstStopCandidate`
+(`js/engine/zhl16.js`) now seeds at the round-up, then walks **down** rung by rung,
+re-simulating the ascent leg on cloned tissues and recomputing `ceilingDepth(gfLo)`,
+stopping at the last rung still clear. This subsumes the old projected-ascent
+deepening loop (the live-ceiling re-eval *is* the projected ascent).
+
+Trade-offs accepted, recorded so they aren't re-litigated:
+- The dynamic first stop is **one rung shallower = slightly less conservative** than
+  Baker round-up. Stated plainly; chosen deliberately for DecoPlanner parity.
+- The in-house **45/25 reference golden** moved first stop 18 m → 15 m (and its
+  derived ladder/deco-time goldens re-pinned in `tests/zhl16.test.js`).
+- The **decotengu published Baker golden is unaffected** (dynamic and round-up both
+  give 18 m there), so the one external reference schedule stays green.
+- Hold-every-rung (below) is **unchanged** — only the first-stop depth moved.
+
+Full rationale, the rung-walk evidence, and sources in
+[BAKER-GF-COMPLIANCE.md](./BAKER-GF-COMPLIANCE.md) ("First-stop placement").
+
 ## Desktop packaging isolated in `desktop/`; releases via git-cliff + plain Node
 
 HALDANE is now also shippable as an offline desktop app (mac/linux/windows),
@@ -57,9 +143,8 @@ the decotengu reference (35 m / 40 min air, GF 30/85, ZH-L16B) starts at 18 m un
 Baker, but the skip loop began at 15 m, losing the 18 m rung. Holding every rung is
 never less safe than skipping (hold ⊇ skip), and recovers the correct first stop.
 
-What did **not** change (already Baker-compliant, verified and left alone): the
-first-stop placement (GF-low ceiling rounded **up** to the next-deeper 3 m rung,
-then a projected-ascent deepening — `firstStopCandidate`); the GF tolerance formula
+What did **not** change *in that round* (the first-stop placement was later changed
+— see "dynamic ceiling" above): the GF tolerance formula
 `Ptol = (P_comp − a·gf)/(gf/b + 1 − gf)` (algebraically identical to Baker's FORTRAN);
 stop-time round-up to whole `minStopTime`; per-stop time = hold excluding the ascent
 leg; and the GF slope anchored at the **first actual stop depth** (Baker's anchor,
@@ -68,12 +153,13 @@ not Subsurface's ratcheting deepest-ceiling anchor).
 Concretely (`js/engine/zhl16.js`, ascent loop in `plan()`): the
 `if (ceilingDepth(...gfNext) > next) { … }` gate around the hold was removed so the
 hold is unconditional; `computeStopMinutes` already enforces `mins >= minStop`.
-Golden schedules in `tests/zhl16.test.js` were re-pinned (the reference 45/25 dive
-now stops at 18/15/12/9/6 instead of 12/9/6), and a Baker-GF compliance suite was
-added (tolerance-formula boundaries at GF=1 and GF=0, GF-high-dominates-NDL,
-hold-every-rung no-gap invariant, and the decotengu 18/15/12/9/6/3 reference). Note
-**`firstStopCandidate` is unchanged** — its iterative round-up + projected-ascent
-loop is exactly Baker's first-stop rule and must not be switched to a floor.
+Golden schedules in `tests/zhl16.test.js` were re-pinned (at the time, the reference
+45/25 dive stopped at 18/15/12/9/6 instead of 12/9/6; the first stop has since moved
+to 15 m under the dynamic-ceiling rule — see "dynamic ceiling" above), and a Baker-GF
+compliance suite was added (tolerance-formula boundaries at GF=1 and GF=0,
+GF-high-dominates-NDL, hold-every-rung no-gap invariant, and the decotengu
+18/15/12/9/6/3 reference). The first-stop placement (`firstStopCandidate`) was Baker
+round-up at this point but **was subsequently changed** to a dynamic ceiling.
 
 ## Removed Edit Deco (verify mode); runtime table always regenerates
 

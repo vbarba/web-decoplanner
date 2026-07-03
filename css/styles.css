@@ -491,8 +491,14 @@ input[type="checkbox"]:checked::after {
 }
 
 /* =============================================================
-   DIVE PANEL — segments table
+   DIVE PANEL — repetitive-dive tabs + segments table
    ============================================================= */
+
+.dive-tabs { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.dive-tabs .seg-control.dive-seg { flex: 1 1 auto; display: flex; }
+.dive-tabs .seg-control.dive-seg button { flex: 1; }
+.dive-tabs .ghost-btn { padding: 6px 10px; }
+.si-grid { margin-bottom: 12px; }
 
 .seg-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
 .seg-table th {

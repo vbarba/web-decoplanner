@@ -215,6 +215,29 @@
       ctx.gasList.push(gas);
     }
 
+    // Optional repetitive-dive seed: 16 compartments of {pN2,pHe} in bar
+    // (the finalTissues shape, optionally after a surfaceInterval() decay).
+    // Absent -> surface air saturation as always.
+    ctx.initialTissues = null;
+    if (input.initialTissues !== undefined && input.initialTissues !== null) {
+      const arr = input.initialTissues;
+      if (!Array.isArray(arr) || arr.length !== NC) {
+        errors.push('initialTissues must be an array of 16 compartments');
+      } else {
+        const pn = [], ph = [];
+        let tOk = true;
+        for (let i = 0; i < NC; i++) {
+          const c = arr[i] || {};
+          const n = Number(c.pN2);
+          const h = Number(def(c.pHe, 0));
+          if (!isFinite(n) || n < 0 || !isFinite(h) || h < 0) tOk = false;
+          pn.push(n); ph.push(h);
+        }
+        if (tOk) ctx.initialTissues = { pn: pn, ph: ph };
+        else errors.push('initialTissues has invalid compartment pressures');
+      }
+    }
+
     const segsIn = Array.isArray(input.segments) ? input.segments : [];
     if (segsIn.length === 0) errors.push('at least one dive segment is required');
     let cur = 0;
@@ -246,7 +269,9 @@
   // Simulation state with row + fine-grained profile recording
   // ---------------------------------------------------------------------
   function makeSim(ctx, firstGasId) {
-    const t = initTissues(ctx.sp);
+    const t = ctx.initialTissues
+      ? { pn: ctx.initialTissues.pn.slice(), ph: ctx.initialTissues.ph.slice() }
+      : initTissues(ctx.sp);
     const sim = {
       ctx: ctx, pn: t.pn, ph: t.ph,
       depth: 0, runtime: 0, gasId: firstGasId,
@@ -374,22 +399,29 @@
     }
   }
 
-  // Whole minutes to wait at the current stop until the ceiling (with the
-  // GF of the NEXT stop) clears that next depth. Computed on cloned tissues;
-  // the caller then applies the stay via holdAt(). null = never clears.
-  function computeStopMinutes(sim, gfNext, nextDepth) {
+  // Hold time at the current stop, Erik Baker DECOMPRESSION_STOP convention
+  // (shared with DecoPlanner/GFDECO): the stop ends on a whole multiple of
+  // minStopTime of RUNTIME, not of time-at-depth. A fractional lead-in first
+  // absorbs the ascent leg's fraction (always > 0, so every rung is held),
+  // then whole minutes are added until the ceiling (with the GF of the NEXT
+  // stop) clears that next depth. Computed on cloned tissues; the caller
+  // applies the stay via holdAt(). null = never clears.
+  function computeStopHold(sim, gfNext, nextDepth) {
     const ctx = sim.ctx;
     const pn = sim.pn.slice();
     const ph = sim.ph.slice();
     const gas = ctx.gases[sim.gasId];
     const minStop = Math.max(1, Math.ceil(ctx.minStop - EPS));
-    let mins = 0;
-    while (mins < 999) {
-      loadConstant(pn, ph, ctx, sim.depth, 1, gas);
-      mins++;
-      if (mins >= minStop && ceilingDepth(pn, ph, gfNext, ctx) <= nextDepth + EPS) return mins;
+    let hold = roundUpMult(sim.runtime, minStop) - sim.runtime;
+    if (hold < EPS) hold = minStop;        // already on a boundary: full increment
+    loadConstant(pn, ph, ctx, sim.depth, hold, gas);
+    let guard = 0;
+    while (ceilingDepth(pn, ph, gfNext, ctx) > nextDepth + EPS) {
+      if (++guard > 999) return null;
+      loadConstant(pn, ph, ctx, sim.depth, minStop, gas);
+      hold += minStop;
     }
-    return null;
+    return hold;
   }
 
   // Remaining whole no-deco minutes at the current depth/gas (cap 999).
@@ -405,25 +437,34 @@
     return 999;
   }
 
-  // First stop = smallest stop multiple >= ceiling(gfLow), never shallower
-  // than lastStop. Off/on-gassing during the ascent itself can deepen the
-  // requirement, so the ascent is pre-simulated on cloned tissues (with gas
-  // changes but without switch holds — holds only shallow the ceiling) and
-  // the candidate deepened until it is self-consistent.
+  // First stop via a DYNAMIC (continuous-ascent) ceiling — the Subsurface /
+  // DecoPlanner convention. The diver ascends rung by rung; the ceiling is
+  // recomputed at each rung as tissues off-gas during the ascent leg, so the
+  // first stop is the shallowest rung still reachable before the next rung is
+  // blocked. This lands one rung shallower than Baker's static round-up on
+  // profiles where off-gassing during the ascent recedes the ceiling faster
+  // than the diver descends to it. Re-evaluating the live ceiling at each rung
+  // also subsumes the old projected-ascent deepening: on a trimix dive where
+  // on-gassing during ascent deepens the requirement, the walk simply stops
+  // earlier (deeper). Seeded at the static round-up. See docs/DECISIONS.md.
   function firstStopCandidate(sim) {
     const ctx = sim.ctx;
     let candidate = Math.max(roundUpMult(ceilingDepth(sim.pn, sim.ph, ctx.gfLo, ctx), ctx.stopInterval), ctx.lastStop);
-    if (candidate > sim.depth) candidate = sim.depth;  // pathological: obligation at/below bottom depth
-    for (let iter = 0; iter < 32; iter++) {
-      const pn = sim.pn.slice();
-      const ph = sim.ph.slice();
-      let d = sim.depth;
-      let gid = sim.gasId;
-      while (d > candidate + EPS) {
-        const g0 = bestSwitchGas(ctx, d, ctx.gases[gid]);   // mirror ascendWithSwitches
+    if (candidate > sim.depth) return Math.min(candidate, sim.depth);  // obligation at/below bottom
+    // Walk the ascent down on cloned tissues, mirroring ascendWithSwitches
+    // (gas changes, no switch holds — holds only shallow the ceiling).
+    const pn = sim.pn.slice();
+    const ph = sim.ph.slice();
+    let d = sim.depth;
+    let gid = sim.gasId;
+    while (candidate > ctx.lastStop + EPS) {
+      const next = Math.max(candidate - ctx.stopInterval, ctx.lastStop);
+      // ascend the cloned diver from d to `next`, breaking at gas switches
+      while (d > next + EPS) {
+        const g0 = bestSwitchGas(ctx, d, ctx.gases[gid]);
         if (g0) gid = g0.id;
-        const brk = nextSwitchBreak(ctx, d, candidate, ctx.gases[gid]);
-        const to = brk === null ? candidate : brk;
+        const brk = nextSwitchBreak(ctx, d, next, ctx.gases[gid]);
+        const to = brk === null ? next : brk;
         loadTravel(pn, ph, ctx, d, to, (d - to) / ctx.ascentRate, ctx.gases[gid]);
         d = to;
         if (brk !== null) {
@@ -431,9 +472,9 @@
           if (g) gid = g.id;
         }
       }
-      const c2 = Math.max(roundUpMult(ceilingDepth(pn, ph, ctx.gfLo, ctx), ctx.stopInterval), ctx.lastStop);
-      if (c2 > candidate + EPS && c2 <= sim.depth) candidate = c2;
-      else break;
+      // Blocked? the live GF-low ceiling now sits above `next` — stop at `candidate`.
+      if (ceilingDepth(pn, ph, ctx.gfLo, ctx) > next + EPS) break;
+      candidate = next;
     }
     return candidate;
   }
@@ -485,6 +526,40 @@
     const c = optsCtx(opts);
     const fN2 = 1 - gas.fO2 - (gas.fHe || 0);
     return Math.max(0, ((c.sp + depth / c.mpb) * fN2 / 0.79 - c.sp) * c.mpb);
+  }
+
+  // Off-gas a finalTissues-shaped array breathing air at the surface for
+  // `minutes` (a repetitive-dive surface interval). Returns the same shape,
+  // ready to feed the next plan() call as input.initialTissues. Works for
+  // tissue states from either engine (both report pN2/pHe in bar).
+  //
+  // `opts.desatMult` (default 1) is the Bühlmann pulmonary-shunt factor: the
+  // elimination half-time is divided by it ONLY for compartments that are
+  // off-gassing (tissue above the inspired pressure), so desatMult < 1 slows
+  // desaturation and retains more residual load. This mirrors Subsurface's
+  // `buehlmann_config.desatmult` (core/deco.c), which ships at 1.0. Standard
+  // ZH-L16 (and Subsurface's default, and HALDANE's default) is symmetric
+  // (desatMult = 1); DecoPlanner slows off-gassing via this shunt — desatMult
+  // ~= 0.75 reproduces DecoPlanner's repetitive-dive schedules here.
+  function surfaceInterval(tissues, minutes, opts) {
+    const c = optsCtx(opts);
+    const dm = (opts && Number(opts.desatMult) > 0) ? Number(opts.desatMult) : 1;
+    const t = Math.max(0, Number(minutes) || 0);
+    const palv = Math.max(0, c.sp - PH2O);   // air at the surface
+    const pinN = palv * 0.79, pinH = 0;
+    const out = [];
+    for (let i = 0; i < NC; i++) {
+      const src = (tissues && tissues[i]) || {};
+      let pN = Math.max(0, Number(src.pN2) || 0);
+      let pH = Math.max(0, Number(src.pHe) || 0);
+      const kN = (LN2 / HT_N2[i]) * (pN > pinN ? dm : 1);   // slow only off-gassing
+      const kH = (LN2 / HT_HE[i]) * (pH > pinH ? dm : 1);
+      out.push({
+        pN2: pinN + (pN - pinN) * Math.exp(-kN * t),
+        pHe: pinH + (pH - pinH) * Math.exp(-kH * t),
+      });
+    }
+    return out;
   }
 
   // Richest breathable mix at depth: max fO2 within ppO2max (floored to a
@@ -578,12 +653,21 @@
         // of skipping already-clear rungs was the engine's one deviation from
         // strict Baker; removed for compliance. See docs/DECISIONS.md.)
         const gfNext = gfAt(next, sim.anchor, ctx);
-        const mins = computeStopMinutes(sim, gfNext, next);
-        if (mins === null) {
+        const hold = computeStopHold(sim, gfNext, next);
+        if (hold === null) {
           return emptyResult(params, ['deco stop at ' + s + ' m does not clear within 999 minutes'], warnings, algoOut);
         }
-        holdAt(sim, 'stop', mins);
-        sim.stops.push({ depth: s, time: mins, runtime: sim.runtime, gasId: sim.gasId });
+        holdAt(sim, 'stop', hold);
+        // stops[].time is the DecoPlanner-style whole-minute figure: stop-end
+        // runtime minus the whole-minute boundary at/below arrival, so the
+        // fractional inbound ascent leg is absorbed (24 m: arrive 32.33,
+        // leave 33.00 -> 1 min). Always an integer >= minStopTime.
+        const minStopEff = Math.max(1, Math.ceil(ctx.minStop - EPS));
+        sim.stops.push({
+          depth: s,
+          time: Math.round(sim.runtime - floorMult(arrivalRt, minStopEff)),
+          runtime: sim.runtime, gasId: sim.gasId,
+        });
         if (decoStartRt === null) decoStartRt = arrivalRt;
         ascendWithSwitches(sim, next);
         s = next;
@@ -671,6 +755,7 @@
     VERSION: VERSION,
     plan: plan,
     gasName: gasName,
+    surfaceInterval: surfaceInterval,
     mod: mod,
     end: end,
     ead: ead,
