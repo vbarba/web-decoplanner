@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to HALDANE, generated from Conventional Commits.
+## [1.1.1] - 2026-07-08
+
+### Bug Fixes
+- **engine:** Reject NaN inputs in VPM-B; gate CI on tests; a11y + dedup cleanups (#4)
+- **tests:** Shim navigator via defineProperty — Node >=21 ships a getter-only global (#5)
+
 ## [1.1.0] - 2026-07-03
 
 ### Features

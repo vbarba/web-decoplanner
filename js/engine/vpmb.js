@@ -61,7 +61,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = 'VPM-B 1.1.0 (Baker VPM-B w/ CVA + Boyle compensation; Subsurface <=4.6.2 parameterization: lambda=6500 fsw-min, radius benchmark factor 1.012)';
+  const VERSION = 'VPM-B 1.1.1 (Baker VPM-B w/ CVA + Boyle compensation; Subsurface <=4.6.2 parameterization: lambda=6500 fsw-min, radius benchmark factor 1.012)';
 
   // ---- compartments -------------------------------------------------------
   const N2_HALF = [5.0, 8.0, 12.5, 18.5, 27.0, 38.3, 54.3, 77.0, 109.0, 146.0,
