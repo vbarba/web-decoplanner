@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         with:
           # Auto-enable Pages (Actions build type) if it is not yet configured,
           # so a fresh clone of this repo deploys without manual setup.
@@ -76,11 +76,11 @@ jobs:
             ./ _site/
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           # Only the staged web app (see the Stage step above), not the repo root.
           path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
