@@ -135,8 +135,6 @@
   var hasPlanned = false;      // live recompute only after 1st success
   var gasSeq = 0;              // unique id counter for added gases
   var planTimer = null;
-  var copyTimer = null;
-  var matrixCopyTimer = null;
   var saveTimer = null;
   var matrixOpen = false;      // view-only: the deco-time table is shown
   var lastMatrix = null;       // last built matrix model (for COPY)
@@ -265,46 +263,47 @@
       .forEach(function (k) { if (typeof s[k] === 'number' && isFinite(s[k])) d[k] = s[k]; });
     if (typeof s.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = s.segmentTimesIncludeTravel;
     if (typeof s.showTravel === 'boolean') d.showTravel = s.showTravel;
-    if (Array.isArray(s.gases) && s.gases.length) {
-      var gs = s.gases.filter(function (g) {
-        return g && typeof g.id === 'string' &&
-               typeof g.fO2 === 'number' && typeof g.fHe === 'number' &&
-               (g.type === 'bottom' || g.type === 'deco');
-      }).map(function (g) {
-        // Migrate gases stored before cylinder planning existed.
-        if (typeof g.cyl !== 'string' || !cylPreset(g.cyl)) {
-          g.cyl = (g.type === 'deco') ? 's80' : 'd2x12';
-        }
-        if (typeof g.startBar !== 'number' || !isFinite(g.startBar) || g.startBar <= 0) {
-          g.startBar = cylPreset(g.cyl).ratedBar;
-        }
-        return g;
-      });
-      if (gs.length) d.gases = gs;
-    }
-    if (!RESERVE_RULES[d.gasReserve]) d.gasReserve = 'thirds';
-    if (Array.isArray(s.segments) && s.segments.length) {
-      var segs = s.segments.filter(function (sg) {
-        return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
-               typeof sg.gasId === 'string';
-      });
-      if (segs.length) d.segments = segs;
-    }
+    var gs = coerceGases(s.gases);
+    if (gs.length) d.gases = gs;
+    var segs = coerceSegments(s.segments);
+    if (segs.length) d.segments = segs;
     if (d.units !== 'metric' && d.units !== 'imperial') d.units = 'metric';
-    // Repetitive-dive records (absent in plans saved before multi-dive existed).
-    if (Array.isArray(s.dives)) {
-      d.dives = s.dives.filter(function (r) {
-        return r && r.dive && typeof r.dive === 'object';
-      }).map(function (r) {
-        return { si: (typeof r.si === 'number' && isFinite(r.si) && r.si >= 0) ? r.si : 60, dive: r.dive };
-      });
-    }
-    if (d.dives.length) {
-      var ai = (typeof s.activeDive === 'number') ? Math.round(s.activeDive) : 0;
-      d.activeDive = Math.min(Math.max(0, ai), d.dives.length - 1);
-    }
+    coerceDives(d, s.dives, s.activeDive);
     coerceState(d);
     state = d;
+  }
+
+  // Shared restore filters (loadState + applyDive): keep only well-formed
+  // records; the cylinder/start-pressure migration happens in coerceState.
+  function coerceGases(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(function (g) {
+      return g && typeof g.id === 'string' &&
+             typeof g.fO2 === 'number' && typeof g.fHe === 'number' &&
+             (g.type === 'bottom' || g.type === 'deco');
+    }).map(function (g) {
+      return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type, cyl: g.cyl, startBar: g.startBar };
+    });
+  }
+  function coerceSegments(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(function (sg) {
+      return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
+             typeof sg.gasId === 'string';
+    }).map(function (sg) { return { depth: sg.depth, time: sg.time, gasId: sg.gasId }; });
+  }
+  // Repetitive-dive records (absent in plans saved before multi-dive existed).
+  function coerceDives(d, list, active) {
+    if (!Array.isArray(list)) return;
+    d.dives = list.filter(function (r) {
+      return r && r.dive && typeof r.dive === 'object';
+    }).map(function (r) {
+      return { si: (typeof r.si === 'number' && isFinite(r.si) && r.si >= 0) ? r.si : 60, dive: r.dive };
+    });
+    if (d.dives.length) {
+      var ai = (typeof active === 'number') ? Math.round(active) : 0;
+      d.activeDive = Math.min(Math.max(0, ai), d.dives.length - 1);
+    }
   }
 
   // Shared post-load coercion: clamp model/water/last-stop, normalise the reserve
@@ -389,17 +388,7 @@
     var d = defaults();
     d.units = state.units;
     d.lang = state.lang;
-    if (Array.isArray(dive.dives) && dive.dives.length) {
-      d.dives = dive.dives.filter(function (r) {
-        return r && r.dive && typeof r.dive === 'object';
-      }).map(function (r) {
-        return { si: (typeof r.si === 'number' && isFinite(r.si) && r.si >= 0) ? r.si : 60, dive: r.dive };
-      });
-      if (d.dives.length) {
-        var ai = (typeof dive.activeDive === 'number') ? Math.round(dive.activeDive) : 0;
-        d.activeDive = Math.min(Math.max(0, ai), d.dives.length - 1);
-      }
-    }
+    coerceDives(d, dive.dives, dive.activeDive);
     var src = dive.settings || {};
     ['algorithm', 'water', 'gasReserve'].forEach(function (k) {
       if (typeof src[k] === 'string') d[k] = src[k];
@@ -410,23 +399,10 @@
     if (typeof src.segmentTimesIncludeTravel === 'boolean') d.segmentTimesIncludeTravel = src.segmentTimesIncludeTravel;
     if (typeof src.showTravel === 'boolean') d.showTravel = src.showTravel;
 
-    if (Array.isArray(dive.gases) && dive.gases.length) {
-      var gs = dive.gases.filter(function (g) {
-        return g && typeof g.id === 'string' &&
-               typeof g.fO2 === 'number' && typeof g.fHe === 'number' &&
-               (g.type === 'bottom' || g.type === 'deco');
-      }).map(function (g) {
-        return { id: g.id, fO2: g.fO2, fHe: g.fHe, type: g.type, cyl: g.cyl, startBar: g.startBar };
-      });
-      if (gs.length) d.gases = gs;
-    }
-    if (Array.isArray(dive.segments) && dive.segments.length) {
-      var segs = dive.segments.filter(function (sg) {
-        return sg && typeof sg.depth === 'number' && typeof sg.time === 'number' &&
-               typeof sg.gasId === 'string';
-      });
-      if (segs.length) d.segments = segs;
-    }
+    var gs = coerceGases(dive.gases);
+    if (gs.length) d.gases = gs;
+    var segs = coerceSegments(dive.segments);
+    if (segs.length) d.segments = segs;
     coerceState(d);
     if (!hasVPM && d.algorithm === 'VPMB') d.algorithm = 'ZHL16C';
     state = d;
@@ -1721,12 +1697,16 @@
     while (s.length < w) s = right ? s + ' ' : ' ' + s;
     return s;
   }
+  // "VPM-B +2" / "ZHL-16B+GF 20/85" — the model line of both text exports.
+  function modelLabel(algorithm, p) {
+    return algorithm === 'VPMB'
+      ? 'VPM-B +' + p.vpmConservatism
+      : (algorithm === 'ZHL16B' ? 'ZHL-16B+GF ' : 'ZHL-16C+GF ') + p.gfLow + '/' + p.gfHigh;
+  }
   function planText(result) {
     var meta = resultGasMeta(result);
     var lines = [];
-    var algoLine = result.algorithm === 'VPMB'
-      ? 'VPM-B +' + (result.params ? result.params.vpmConservatism : state.vpmConservatism)
-      : (result.algorithm === 'ZHL16B' ? 'ZHL-16B+GF ' : 'ZHL-16C+GF ') + (result.params ? result.params.gfLow + '/' + result.params.gfHigh : '');
+    var algoLine = modelLabel(result.algorithm, result.params || state);
     lines.push('HALDANE DECOMPRESSION PLAN');
     lines.push('MODEL ' + algoLine + '  WATER ' + state.water.toUpperCase() +
                '  SP ' + fmt(state.surfacePressure, 3) + ' bar  UNITS ' + state.units.toUpperCase());
@@ -1782,12 +1762,17 @@
 
   function copyPlan() {
     if (!lastGoodResult) return;
-    var text = planText(lastGoodResult);
+    copyToClipboard(planText(lastGoodResult), $('copy-btn'));
+  }
+  // Copy text and flash the button ("COPIED ✓" / "COPY FAILED"), restoring the
+  // translated btn.copy label after 1.6 s. The restore timer lives on the
+  // button so each copy button keeps its own.
+  function copyToClipboard(text, btn) {
     function done(okFlag) {
-      var btn = $('copy-btn');
+      if (!btn) return;
       btn.textContent = okFlag ? 'COPIED ✓' : 'COPY FAILED';
-      if (copyTimer) clearTimeout(copyTimer);
-      copyTimer = setTimeout(function () { btn.textContent = 'COPY'; }, 1600);
+      if (btn._copyTimer) clearTimeout(btn._copyTimer);
+      btn._copyTimer = setTimeout(function () { btn.textContent = tr('btn.copy'); }, 1600);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallbackCopy(text, done); });
@@ -2071,10 +2056,7 @@
     var du = depthUnit();
     var lines = [];
     lines.push('HALDANE — DECO-TIME TABLE');
-    var algoLine = state.algorithm === 'VPMB'
-      ? 'VPM-B +' + state.vpmConservatism
-      : (state.algorithm === 'ZHL16B' ? 'ZHL-16B+GF ' : 'ZHL-16C+GF ') + state.gfLow + '/' + state.gfHigh;
-    lines.push('MODEL ' + algoLine + '  UNITS ' + state.units.toUpperCase());
+    lines.push('MODEL ' + modelLabel(state.algorithm, state) + '  UNITS ' + state.units.toUpperCase());
     lines.push('');
     model.blocks.forEach(function (block) {
       lines.push(matrixDepthHeader(block));
@@ -2114,21 +2096,7 @@
 
   function copyMatrix() {
     if (!lastMatrix) return;
-    var text = matrixText(lastMatrix);
-    function done(okFlag) {
-      var btn = $('matrix-copy-btn');
-      if (!btn) return;
-      btn.textContent = okFlag ? 'COPIED ✓' : 'COPY FAILED';
-      if (matrixCopyTimer) clearTimeout(matrixCopyTimer);
-      matrixCopyTimer = setTimeout(function () {
-        btn.textContent = tr('btn.copy');
-      }, 1600);
-    }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { fallbackCopy(text, done); });
-    } else {
-      fallbackCopy(text, done);
-    }
+    copyToClipboard(matrixText(lastMatrix), $('matrix-copy-btn'));
   }
 
   /* ----------------------------------------------------------
@@ -2461,6 +2429,7 @@
       invalidateCarry();
       if (!hasVPM && state.algorithm === 'VPMB') state.algorithm = 'ZHL16C';
       renderRail();
+      syncMatrixInputs(); // matrix range fields back to defaults too
       saveState();
       applyValidation();
       runPlan(true);

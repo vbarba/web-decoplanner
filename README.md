@@ -16,7 +16,8 @@ HALDANE is a multi-gas technical dive decompression planner that runs entirely
 in the browser: plain HTML/CSS/JS, zero dependencies, no build step, no network
 calls. It implements two decompression models side by side:
 
-- **Bühlmann ZHL-16C with gradient factors** (GF low/high, 5–100)
+- **Bühlmann ZHL-16 with gradient factors** (GF low/high, 5–100; selectable
+  ZHL-16B / ZHL-16C coefficient set — the app defaults to ZHL-16B)
 - **VPM-B** (Varying Permeability Model with Boyle compensation and critical
   volume algorithm) with conservatism levels **+0 to +5**
 
@@ -73,6 +74,7 @@ Node only (no test framework, no packages):
 ```sh
 node tests/zhl16.test.js     # Bühlmann engine suite
 node tests/vpmb.test.js      # VPM-B engine suite (incl. Baker VPMDECO reference)
+node tests/i18n.test.js      # i18n key-parity + fallback + browser detection
 node js/ui/charts.js         # charts self-check (silent on success, exit 0)
 ```
 
@@ -87,7 +89,7 @@ node js/ui/charts.js         # charts self-check (silent on success, exit 0)
 | --- | --- | --- |
 | `index.html` | — | Page shell, form markup, script tags |
 | `css/styles.css` | — | All styling, responsive layout |
-| `js/engine/zhl16.js` | `window.DecoEngine` | Bühlmann ZHL-16C + gradient factors |
+| `js/engine/zhl16.js` | `window.DecoEngine` | Bühlmann ZHL-16C/16B + gradient factors |
 | `js/engine/vpmb.js` | `window.VPMB` | VPM-B with CVA + Boyle compensation |
 | `js/ui/charts.js` | `window.Charts` | SVG charts: `renderProfile(el, result, {units})`, `renderTissues(el, result, {units})` |
 | `js/ui/app.js` | — | Form state, input building, engine dispatch, result rendering |

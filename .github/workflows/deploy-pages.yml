@@ -19,7 +19,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run test suites (no deps, no framework)
+        run: |
+          node tests/zhl16.test.js
+          node tests/vpmb.test.js
+          node tests/i18n.test.js
+          node js/ui/charts.js
+
   deploy:
+    needs: test
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
