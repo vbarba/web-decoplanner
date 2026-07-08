@@ -55,10 +55,12 @@
         <h2 class="panel-title" id="dive-title" data-i18n="box.dive" data-i18n-title="tip.dive" title="The depth/time profile of your dive — each level is a depth held for a number of minutes on a chosen gas.">Dive</h2>
         <!-- Repetitive-dive tabs: residual tissue load from each dive is carried
              through the surface interval into the next (see docs/ARCHITECTURE.md). -->
-        <div class="dive-tabs" id="dive-tabs" role="tablist" aria-label="Dives"></div>
+        <!-- role=group (not tablist): the buttons carry aria-pressed toggle
+             semantics like every other seg-control, not role=tab. -->
+        <div class="dive-tabs" id="dive-tabs" role="group" aria-label="Dives"></div>
         <div class="settings-grid si-grid" id="si-row" hidden>
           <label for="set-si" data-i18n-title="tipf.surfaceInterval" title="Surface interval before this dive — minutes breathing air at the surface since the previous dive. Residual tissue load from the previous dive is carried into this plan."><span data-i18n="field.surfaceInterval">SURFACE INTERVAL</span> <span class="unit">min</span></label>
-          <input type="number" id="set-si" class="num-input" data-vkey="surfaceInterval" min="0" max="2880" step="5" inputmode="numeric">
+          <input type="number" id="set-si" class="num-input" min="0" max="2880" step="5" inputmode="numeric">
         </div>
         <table class="seg-table">
           <thead>

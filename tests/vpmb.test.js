@@ -418,6 +418,21 @@ const ref = VPMB.plan(baseInput());
   check('parity: minStopTime=1.4 yields the same minimum stop in both engines',
     minStop(pm.z) === minStop(pm.v) && minStop(pm.z) === 2,
     'ZHL=' + minStop(pm.z) + ' VPM=' + minStop(pm.v));
+  // NaN / malformed numeric inputs: rejected by BOTH engines (VPM used to
+  // silently substitute the default for any non-finite value).
+  ['descentRate', 'ascentRate', 'stopInterval', 'lastStopDepth', 'surfacePressure'].forEach(function (field) {
+    const bad = {}; bad[field] = NaN;
+    const pn = pair(bad);
+    check('parity: ' + field + '=NaN rejected by both engines',
+      pn.z.ok === false && pn.v.ok === false,
+      'ZHL ok=' + pn.z.ok + ' VPM ok=' + pn.v.ok);
+  });
+  // Failed plans echo DEFAULTED params, same shape as ok results (ZHL parity).
+  const pf = pair({ descentRate: NaN });
+  check('parity: failed VPM plan echoes defaulted params',
+    pf.v.params.gfLow === 50 && pf.v.params.vpmConservatism === 2 &&
+    pf.v.params.lastStopDepth === 6 && pf.v.params.surfacePressure === 1.013,
+    JSON.stringify(pf.v.params));
 })();
 
 // ---------------------------------------------------------------------------

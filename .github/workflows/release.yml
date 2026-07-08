@@ -35,8 +35,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── JOB 0: run the test suites — nothing is tagged or built if they fail ─────
+  test:
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run test suites (no deps, no framework)
+        run: |
+          node tests/zhl16.test.js
+          node tests/vpmb.test.js
+          node tests/i18n.test.js
+          node js/ui/charts.js
+
   # ── JOB 1: version, changelog, tag, create the (empty) GitHub Release ────────
   version:
+    needs: test
     runs-on: ubuntu-latest
     # Defense-in-depth: skip our own bump commit even if it ever re-triggers.
     if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}

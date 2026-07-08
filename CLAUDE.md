@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-HALDANE is a multi-gas technical **dive decompression planner** that runs entirely in the browser: plain HTML/CSS/JS (ES5-style, `var` + function expressions), **zero dependencies, no build step, no network calls**. It implements two decompression models — Bühlmann ZHL-16C + gradient factors, and VPM-B — and a cylinder/gas-supply planner. Deployed to GitHub Pages: <https://vbarba.github.io/web-decoplanner/>.
+HALDANE is a multi-gas technical **dive decompression planner** that runs entirely in the browser: plain HTML/CSS/JS (ES5-style, `var` + function expressions), **zero dependencies, no build step, no network calls**. It implements two decompression models — Bühlmann ZHL-16 + gradient factors (selectable ZHL-16B/ZHL-16C coefficient set; the UI defaults to ZHL-16B), and VPM-B — and a cylinder/gas-supply planner. Deployed to GitHub Pages: <https://vbarba.github.io/web-decoplanner/>.
 
 This is educational software. The README opens with a safety disclaimer; keep it intact and do not weaken it.
 
@@ -38,7 +38,7 @@ Five files load in order (see `index.html`), each attaching one global; `js/ui/a
 
 | File | Global | Role |
 | --- | --- | --- |
-| `js/engine/zhl16.js` | `window.DecoEngine` | Bühlmann ZHL-16C + gradient factors |
+| `js/engine/zhl16.js` | `window.DecoEngine` | Bühlmann ZHL-16C/16B + gradient factors |
 | `js/engine/vpmb.js` | `window.VPMB` | VPM-B (critical-volume algorithm + Boyle compensation) |
 | `js/ui/charts.js` | `window.Charts` | SVG charts built via DOM (no canvas/libs) |
 | `js/ui/i18n.js` | `window.I18N` | UI-chrome + tooltip translations (en/es/fr/de/zh) |

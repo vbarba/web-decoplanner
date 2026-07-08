@@ -61,7 +61,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = 'VPM-B 1.1.0 (Baker VPM-B w/ CVA + Boyle compensation; Subsurface 4.5 parameterization: lambda=6500 fsw-min, radius benchmark factor 1.2)';
+  const VERSION = 'VPM-B 1.1.0 (Baker VPM-B w/ CVA + Boyle compensation; Subsurface <=4.6.2 parameterization: lambda=6500 fsw-min, radius benchmark factor 1.012)';
 
   // ---- compartments -------------------------------------------------------
   const N2_HALF = [5.0, 8.0, 12.5, 18.5, 27.0, 38.3, 54.3, 77.0, 109.0, 146.0,
@@ -349,7 +349,10 @@
   // input validation / context
   // ========================================================================
 
-  function num(v, dflt) { return (typeof v === 'number' && isFinite(v)) ? v : dflt; }
+  // Defaults only for ABSENT values; a present-but-malformed value (NaN,
+  // non-numeric) coerces to NaN and must fail validation — same contract as
+  // the ZHL engine's def()/Number() handling, so both engines agree on ok.
+  function num(v, dflt) { return (v === undefined || v === null) ? dflt : Number(v); }
 
   function validate(input) {
     const errors = [], warnings = [];
@@ -362,9 +365,9 @@
     if (!(surfaceP > 0.5 && surfaceP < 1.2)) errors.push('surfacePressure must be in (0.5, 1.2) bar');
     let cons = num(input.vpmConservatism, 2);
     cons = Math.round(cons);
-    if (cons < 0 || cons > 5) {
+    if (!(cons >= 0 && cons <= 5)) {
       warnings.push('vpmConservatism clamped to 0..5');
-      cons = Math.min(5, Math.max(0, cons));
+      cons = isFinite(cons) ? Math.min(5, Math.max(0, cons)) : 2;
     }
     const P = {
       water: water,
@@ -393,9 +396,10 @@
       gasList: [],
       segments: [],
     };
-    if (P.descentRate <= 0 || P.ascentRate <= 0) errors.push('descentRate and ascentRate must be > 0');
-    if (P.interval <= 0) errors.push('stopInterval must be > 0');
-    if (P.lastStop <= 0) errors.push('lastStopDepth must be > 0');
+    // !(x > 0) form so NaN is rejected, not just negatives (ZHL parity).
+    if (!(P.descentRate > 0) || !(P.ascentRate > 0)) errors.push('descentRate and ascentRate must be > 0');
+    if (!(P.interval > 0)) errors.push('stopInterval must be > 0');
+    if (!(P.lastStop > 0)) errors.push('lastStopDepth must be > 0');
 
     const gases = Array.isArray(input.gases) ? input.gases : [];
     if (gases.length === 0) errors.push('at least one gas is required');
@@ -426,8 +430,8 @@
       const d = num(s && s.depth, NaN), tm = num(s && s.time, NaN);
       // Parity with the ZHL engine: a 0 m (surface) segment and 0-min time are
       // accepted; only negative / non-finite values are rejected.
-      if (!(d >= 0)) { errors.push('segment #' + i + ' has invalid depth'); continue; }
-      if (!(tm >= 0)) { errors.push('segment #' + i + ' has invalid time'); continue; }
+      if (!isFinite(d) || d < 0) { errors.push('segment #' + i + ' has invalid depth'); continue; }
+      if (!isFinite(tm) || tm < 0) { errors.push('segment #' + i + ' has invalid time'); continue; }
       if (!s.gasId || !P.gasById[s.gasId]) { errors.push('segment #' + i + ' references unknown gasId "' + (s && s.gasId) + '"'); continue; }
       P.segments.push({ depth: d, time: tm, gasId: s.gasId });
     }
@@ -447,7 +451,7 @@
         for (let i = 0; i < NC; i++) {
           const c = arr[i] || {};
           const n = num(c.pN2, NaN), h = num(c.pHe, 0);
-          if (!(n >= 0) || !(h >= 0)) tOk = false;
+          if (!isFinite(n) || n < 0 || !isFinite(h) || h < 0) tOk = false;
           n2.push(n); he.push(h);
         }
         if (tOk) P.initialTissues = { n2: n2, he: he };
@@ -920,14 +924,17 @@
   // ========================================================================
 
   function emptyResult(input, errors, warnings) {
-    const w = (input && input.water === 'fresh') ? 'fresh' : 'salt';
+    const inp = input || {};
+    const w = inp.water === 'fresh' ? 'fresh' : 'salt';
+    // Echo DEFAULTED params even on failure, like the ZHL engine, so
+    // result.params has the same shape on ok and failed plans.
     return {
       ok: false, errors: errors, warnings: warnings || [], algorithm: 'VPMB',
       params: {
-        gfLow: input && input.gfLow, gfHigh: input && input.gfHigh,
-        vpmConservatism: input && input.vpmConservatism,
-        lastStopDepth: input && input.lastStopDepth,
-        surfacePressure: input && input.surfacePressure, water: w
+        gfLow: num(inp.gfLow, 50), gfHigh: num(inp.gfHigh, 80),
+        vpmConservatism: num(inp.vpmConservatism, 2),
+        lastStopDepth: num(inp.lastStopDepth, 6),
+        surfacePressure: num(inp.surfacePressure, 1.013), water: w
       },
       table: [], stops: [], noDeco: false, ndl: null, firstStopDepth: null,
       totalRuntime: 0, totalDecoTime: 0, gasUsage: [],
