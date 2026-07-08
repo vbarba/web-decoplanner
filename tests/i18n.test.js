@@ -58,14 +58,19 @@ check('t after coercion returns English', I18N.t('btn.save') === 'SAVE', I18N.t(
 
 // ---------------------------------------------------------------------------
 // 4. Browser detection (navigator shim)
-var savedNav = global.navigator;
-global.navigator = { languages: ['fr-FR', 'en-US'] };
+// Node >= 21 ships a getter-only global `navigator`, so plain assignment
+// throws; defineProperty shims it on every Node version.
+var savedNav = Object.getOwnPropertyDescriptor(global, 'navigator');
+function setNav(v) {
+  Object.defineProperty(global, 'navigator', { value: v, configurable: true, writable: true });
+}
+setNav({ languages: ['fr-FR', 'en-US'] });
 check('detect picks fr from navigator.languages', I18N.detect() === 'fr', I18N.detect());
-global.navigator = { language: 'de' };
+setNav({ language: 'de' });
 check('detect picks de from navigator.language', I18N.detect() === 'de', I18N.detect());
-global.navigator = { languages: ['pt-BR'] };
+setNav({ languages: ['pt-BR'] });
 check('detect falls back to en for unsupported locale', I18N.detect() === 'en', I18N.detect());
-if (savedNav === undefined) delete global.navigator; else global.navigator = savedNav;
+if (savedNav) Object.defineProperty(global, 'navigator', savedNav); else delete global.navigator;
 
 // ---------------------------------------------------------------------------
 console.log(failures === 0 ? 'ALL TESTS PASSED' : failures + ' TEST(S) FAILED');
